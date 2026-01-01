@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dictation App</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/genai": "https://esm.sh/@google/genai@^0.8.0",
+          "marked": "https://esm.sh/marked@^4.0.0"
+        }
+      }
+    </script>
+  <link rel="stylesheet" href="/src/index.css">
+</head>
+  <body>
+    <div class="app-container">
+      <div class="app-main-wrapper">
+        <div class="sidebar" id="knowledgeBaseSidebar">
+          <h3 class="sidebar-title">Knowledge Base</h3>
+          <div class="folder-tree-container" id="folderTree"></div>
+        </div>
+        <div class="resizer" id="resizer"></div>
+        <div class="main-content">
+          <div class="note-area">
+            <div class="note-header">
+              <div class="title-container">
+                <div class="editor-title" contenteditable="true" placeholder="Untitled Note">
+                  Untitled Note
+                </div>
+                <div id="noteTimestamp" class="note-timestamp"></div>
+              </div>
+              <div class="note-actions">
+                  <button class="action-button-header" id="formatATPButton" title="Format as ATP Prompt">
+                      <i class="fas fa-brain"></i>
+                  </button>
+                  <button class="action-button-header" id="readAloudButton" title="Read Note Aloud">
+                      <i class="fas fa-volume-high"></i>
+                  </button>
+                  <button class="action-button-header" id="generateVideoButton" title="Generate Video from Note">
+                      <i class="fas fa-film"></i>
+                  </button>
+              </div>
+              <div class="tab-navigation-container">
+                <div class="tab-navigation">
+                  <button class="tab-button active" data-tab="note">Polished</button>
+                  <button class="tab-button" data-tab="raw">Raw</button>
+                  <button class="tab-button" id="knowledgeBaseTab" data-tab="kb" style="display: none;">Knowledge</button>
+                  <div class="active-tab-indicator"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="note-content-wrapper">
+              <div
+                id="polishedNote"
+                class="note-content active"
+                data-tab="note"
+                contenteditable="true"
+                placeholder="Your polished notes will appear here..."
+              ></div>
+              <div
+                id="rawTranscription"
+                class="note-content"
+                data-tab="raw"
+                contenteditable="true"
+                placeholder="Raw transcription will appear here..."
+              ></div>
+              <div
+                id="knowledgeBaseContent"
+                class="note-content"
+                data-tab="kb"
+              ></div>
+            </div>
+          </div>
+
+          <div class="recording-interface">
+            <div id="liveRecordingTitle" class="live-recording-title" style="display: none">
+              Recording
+            </div>
+            <div class="visualization-controls" style="display: none;">
+              <div class="control-group">
+                <label class="control-label">Visualizer</label>
+                <div class="control-options" id="vizTypeSelector">
+                  <button data-viz="bars" class="active" title="Frequency Bars">Bars</button>
+                  <button data-viz="waveform" title="Time-domain Waveform">Wave</button>
+                  <button data-viz="spectrogram" title="Spectrogram">Spectrogram</button>
+                </div>
+              </div>
+              <div class="control-group">
+                <label class="control-label">Color</label>
+                <div class="control-options" id="vizColorSelector">
+                  <button data-color="red" class="active" title="Default Fire">Fire</button>
+                  <button data-color="blue" title="Ocean Blue">Ocean</button>
+                  <button data-color="sunset" title="Sunset Gradient">Sunset</button>
+                  <button data-color="mono" title="Monochrome">Mono</button>
+                </div>
+              </div>
+            </div>
+            <canvas id="liveWaveformCanvas" style="display: none;"></canvas>
+            <canvas id="liveSpectrogramCanvas" style="display: none;"></canvas>
+            <div id="liveRecordingTimerDisplay" class="live-recording-timer" style="display: none">
+              00:00.00
+            </div>
+            <div class="status-playback-container">
+              <div class="status-indicator">
+                <span id="recordingStatus" class="status-text">Ready to record</span>
+              </div>
+              <div id="playbackControls" class="playback-controls hidden">
+                <button id="playPauseButton" class="playback-button" title="Play/Pause">
+                  <i class="fas fa-play"></i>
+                </button>
+                <div class="playback-timeline">
+                  <span id="currentTime" class="time-display">00:00</span>
+                  <input type="range" id="seekBar" class="seek-bar" value="0" min="0" max="100" step="0.1" />
+                  <span id="totalDuration" class="time-display">00:00</span>
+                </div>
+                <button id="downloadButton" class="playback-button" title="Download Audio">
+                  <i class="fas fa-download"></i>
+                </button>
+              </div>
+            </div>
+
+            <div class="recording-controls">
+              <div class="left-controls-cluster">
+                  <button class="action-button" id="loadNotesButton" title="Load Notes">
+                      <i class="fas fa-folder-open"></i>
+                  </button>
+                  <button class="action-button" id="saveNotesButton" title="Save All Notes">
+                      <i class="fas fa-save"></i>
+                  </button>
+                  <button class="action-button" id="themeToggleButton" title="Toggle Theme">
+                    <i class="fas fa-sun"></i>
+                  </button>
+              </div>
+
+              <button id="recordButton" class="record-button" title="Start/Stop Recording">
+                <div class="record-button-inner">
+                  <i class="fas fa-microphone"></i>
+                </div>
+                <svg class="record-waves" viewBox="0 0 200 200">
+                  <circle class="wave wave1" cx="100" cy="100" r="40" />
+                  <circle class="wave wave2" cx="100" cy="100" r="70" />
+                  <circle class="wave wave3" cx="100" cy="100" r="100" />
+                </svg>
+                <span class="record-text">Record</span>
+              </button>
+
+              <div class="right-controls-cluster">
+                <button class="action-button" id="newButton" title="New Note">
+                  <i class="fas fa-file"></i>
+                </button>
+                <button class="action-button" id="deleteNoteButton" title="Delete Note">
+                  <i class="fas fa-trash-alt"></i>
+                </button>
+                <div class="append-toggle-container" title="Toggle Append Mode">
+                  <label class="switch">
+                    <input type="checkbox" id="appendModeToggle">
+                    <span class="slider round"></span>
+                  </label>
+                  <label for="appendModeToggle" class="append-toggle-label">Append</label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="videoModal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <button id="closeModalButton" class="modal-close-button">&times;</button>
+        <h2 id="modalTitle">Generating Your Video</h2>
+        <div id="modalLoadingState" class="modal-state">
+          <div class="spinner"></div>
+          <p id="modalStatusText">Warming up the creative engine...</p>
+        </div>
+        <div id="modalResultState" class="modal-state hidden">
+          <video id="generatedVideo" controls></video>
+          <a id="videoDownloadLink" class="button-primary" download>Download Video</a>
+        </div>
+        <div id="modalErrorState" class="modal-state hidden">
+          <p id="modalErrorText"></p>
+        </div>
+      </div>
+    </div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

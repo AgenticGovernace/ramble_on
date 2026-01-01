@@ -1,0 +1,9 @@
+{
+  "name": "Ramble_On",
+  "description": "",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ],
+  "prompt": ""
+}
