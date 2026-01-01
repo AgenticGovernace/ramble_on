@@ -75,14 +75,16 @@ class VoiceNotesApp {
   private downloadButton: HTMLButtonElement;
 
   private isAppendMode = false;
-  private recordingMode: 'note' | 'atp' = 'note';
+  private recordingMode: 'note' | 'atp' | 'medium' = 'note';
   private appendModeToggle: HTMLInputElement;
   private recordingSessionId: string | null = null;
   
   private readAloudButton: HTMLButtonElement;
   private generateVideoButton: HTMLButtonElement;
   private formatATPButton: HTMLButtonElement;
-  
+  private formatMediumButton: HTMLButtonElement;
+  private refreshPolishedButton: HTMLButtonElement;
+
   private videoModal: HTMLDivElement;
   private closeModalButton: HTMLButtonElement;
   private modalTitle: HTMLHeadingElement;
@@ -102,6 +104,10 @@ class VoiceNotesApp {
   private folderTreeContainer: HTMLDivElement;
   private knowledgeBaseTab: HTMLButtonElement;
   private knowledgeBaseContent: HTMLDivElement;
+  private kbContentDisplay: HTMLDivElement;
+  private kbContentEditor: HTMLTextAreaElement;
+  private saveKbButton: HTMLButtonElement;
+  private currentKbFile: KnowledgeBaseItem | null = null;
 
   private tabContainer: HTMLElement;
   private tabButtons: NodeListOf<HTMLButtonElement>;
@@ -127,7 +133,7 @@ class VoiceNotesApp {
     "Finalizing the edit...",
   ];
   
-  private readonly knowledgeBaseData: KnowledgeBaseItem[] = [
+  private knowledgeBaseData: KnowledgeBaseItem[] = [
     { type: 'folder', name: 'Projects', children: [
       { type: 'folder', name: 'Codex_Experiments', children: [
         { type: 'file', name: 'cli_trigger.py', content: 'import argparse\n\ndef main():\n    parser = argparse.ArgumentParser(description="A simple CLI tool.")\n    parser.add_argument("--name", default="World", help="Name to greet.")\n    args = parser.parse_args()\n    print(f"Hello, {args.name}!")\n\nif __name__ == "__main__":\n    main()' },
@@ -204,6 +210,8 @@ class VoiceNotesApp {
     this.readAloudButton = document.getElementById('readAloudButton') as HTMLButtonElement;
     this.generateVideoButton = document.getElementById('generateVideoButton') as HTMLButtonElement;
     this.formatATPButton = document.getElementById('formatATPButton') as HTMLButtonElement;
+    this.formatMediumButton = document.getElementById('formatMediumButton') as HTMLButtonElement;
+    this.refreshPolishedButton = document.getElementById('refreshPolishedButton') as HTMLButtonElement;
     this.videoModal = document.getElementById('videoModal') as HTMLDivElement;
     this.closeModalButton = document.getElementById('closeModalButton') as HTMLButtonElement;
     this.modalTitle = document.getElementById('modalTitle') as HTMLHeadingElement;
@@ -220,6 +228,9 @@ class VoiceNotesApp {
     this.folderTreeContainer = document.getElementById('folderTree') as HTMLDivElement;
     this.knowledgeBaseTab = document.getElementById('knowledgeBaseTab') as HTMLButtonElement;
     this.knowledgeBaseContent = document.getElementById('knowledgeBaseContent') as HTMLDivElement;
+    this.kbContentDisplay = document.getElementById('kbContentDisplay') as HTMLDivElement;
+    this.kbContentEditor = document.getElementById('kbContentEditor') as HTMLTextAreaElement;
+    this.saveKbButton = document.getElementById('saveKbButton') as HTMLButtonElement;
 
     this.tabContainer = document.querySelector('.tab-navigation') as HTMLElement;
     this.tabButtons = this.tabContainer.querySelectorAll('.tab-button');
@@ -255,7 +266,8 @@ class VoiceNotesApp {
     this.initResizer();
     this.buildKnowledgeBasePath(this.knowledgeBaseData);
     this.renderKnowledgeBase();
-    void this.persistKnowledgeBase('initial');
+    void this.loadKnowledgeBaseFromDisk();
+    this.registerKnowledgeBaseWatcher();
     this.loadNotesFromStorage();
     requestAnimationFrame(() => {
         const initiallyActiveButton = this.tabContainer.querySelector<HTMLButtonElement>('.tab-button.active');
@@ -293,6 +305,10 @@ class VoiceNotesApp {
     this.readAloudButton.addEventListener('click', () => this.toggleReadAloud());
     this.generateVideoButton.addEventListener('click', () => this.startVideoGeneration());
     this.formatATPButton.addEventListener('click', () => this.toggleATPRecording());
+    this.formatMediumButton.addEventListener('click', () => this.toggleMediumRecording());
+    this.refreshPolishedButton.addEventListener('click', () => this.refreshPolishedContent());
+    this.saveKbButton.addEventListener('click', () => this.saveKnowledgeBaseFile());
+    this.kbContentDisplay.addEventListener('dblclick', () => this.enableKbEditing());
     this.closeModalButton.addEventListener('click', () => this.hideVideoModal());
     this.videoModal.addEventListener('click', (e) => {
         if (e.target === this.videoModal) {
@@ -421,7 +437,6 @@ class VoiceNotesApp {
     const treeRoot = this.createTreeElement(this.knowledgeBaseData);
     treeRoot.classList.add('folder-tree');
     this.folderTreeContainer.appendChild(treeRoot);
-    void this.persistKnowledgeBase('render');
   }
 
   private createTreeElement(items: KnowledgeBaseItem[]): HTMLUListElement {
@@ -484,27 +499,89 @@ class VoiceNotesApp {
   }
 
   private async openKnowledgeBaseFile(fileItem: KnowledgeBaseItem): Promise<void> {
+    this.currentKbFile = fileItem;
     this.knowledgeBaseTab.textContent = fileItem.name;
     this.knowledgeBaseTab.title = fileItem.path || fileItem.name;
     this.knowledgeBaseTab.style.display = 'inline-block';
 
-    this.knowledgeBaseContent.innerHTML = ''; // Clear previous content
+    this.kbContentDisplay.innerHTML = '';
+    this.kbContentDisplay.style.display = 'block';
+    this.kbContentEditor.style.display = 'none';
+    this.saveKbButton.style.display = 'none';
 
     if (fileItem.name.endsWith('.md') && fileItem.content) {
-        this.knowledgeBaseContent.classList.add('is-markdown');
-        this.knowledgeBaseContent.innerHTML = await marked.parse(fileItem.content);
+        this.kbContentDisplay.classList.add('is-markdown');
+        this.kbContentDisplay.innerHTML = await marked.parse(fileItem.content);
     } else {
-        this.knowledgeBaseContent.classList.remove('is-markdown');
+        this.kbContentDisplay.classList.remove('is-markdown');
         const pre = document.createElement('pre');
         const code = document.createElement('code');
         code.textContent = fileItem.content || 'File is empty.';
         pre.appendChild(code);
-        this.knowledgeBaseContent.appendChild(pre);
+        this.kbContentDisplay.appendChild(pre);
     }
-    
+
     this.setActiveTab(this.knowledgeBaseTab);
   }
 
+  private enableKbEditing(): void {
+    if (!this.currentKbFile) return;
+
+    this.kbContentDisplay.style.display = 'none';
+    this.kbContentEditor.style.display = 'block';
+    this.kbContentEditor.value = this.currentKbFile.content || '';
+    this.saveKbButton.style.display = 'inline-block';
+    this.kbContentEditor.focus();
+  }
+
+  private async saveKnowledgeBaseFile(): Promise<void> {
+    if (!this.currentKbFile || !this.currentKbFile.path) {
+      alert('No Knowledge Base file is currently open.');
+      return;
+    }
+
+    if (!window.rambleOnDB?.writeKnowledgeBaseFile) {
+      alert('Knowledge Base writing is only available in desktop mode.');
+      return;
+    }
+
+    const newContent = this.kbContentEditor.value;
+
+    try {
+      this.recordingStatus.textContent = 'Saving Knowledge Base file...';
+
+      await window.rambleOnDB.writeKnowledgeBaseFile({
+        relativePath: this.currentKbFile.path,
+        content: newContent
+      });
+
+      this.currentKbFile.content = newContent;
+
+      this.kbContentDisplay.innerHTML = '';
+      if (this.currentKbFile.name.endsWith('.md')) {
+        this.kbContentDisplay.classList.add('is-markdown');
+        this.kbContentDisplay.innerHTML = await marked.parse(newContent);
+      } else {
+        this.kbContentDisplay.classList.remove('is-markdown');
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.textContent = newContent || 'File is empty.';
+        pre.appendChild(code);
+        this.kbContentDisplay.appendChild(pre);
+      }
+
+      this.kbContentDisplay.style.display = 'block';
+      this.kbContentEditor.style.display = 'none';
+      this.saveKbButton.style.display = 'none';
+
+      this.recordingStatus.textContent = 'Knowledge Base file saved successfully.';
+    } catch (error) {
+      console.error('Error saving Knowledge Base file:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      this.recordingStatus.textContent = `Error saving file: ${errorMessage}`;
+      alert(`Failed to save Knowledge Base file: ${errorMessage}`);
+    }
+  }
 
   private serializeKnowledgeBase(items: KnowledgeBaseItem[], depth = 0): string {
     let result = '';
@@ -587,12 +664,24 @@ class VoiceNotesApp {
     });
   }
 
-  private async persistKnowledgeBase(source: string): Promise<void> {
-    if (!window.rambleOnDB) return;
-    await window.rambleOnDB.saveKnowledgeBase({
-      content: JSON.stringify(this.knowledgeBaseData),
-      createdAt: Date.now(),
-      source,
+  private async loadKnowledgeBaseFromDisk(): Promise<void> {
+    if (!window.rambleOnDB?.getKnowledgeBase) return;
+    try {
+      const payload = await window.rambleOnDB.getKnowledgeBase();
+      if (payload?.tree?.length) {
+        this.knowledgeBaseData = payload.tree;
+        this.buildKnowledgeBasePath(this.knowledgeBaseData);
+        this.renderKnowledgeBase();
+      }
+    } catch (error) {
+      console.warn('Failed to load knowledge base from disk:', error);
+    }
+  }
+
+  private registerKnowledgeBaseWatcher(): void {
+    if (!window.rambleOnDB?.onKnowledgeBaseUpdated) return;
+    window.rambleOnDB.onKnowledgeBaseUpdated(() => {
+      void this.loadKnowledgeBaseFromDisk();
     });
   }
 
@@ -956,6 +1045,13 @@ class VoiceNotesApp {
         atpIcon.classList.add('fa-brain');
     }
 
+    this.formatMediumButton.classList.remove('speaking');
+    const mediumIcon = this.formatMediumButton.querySelector('i');
+    if(mediumIcon && mediumIcon.classList.contains('fa-stop')) {
+        mediumIcon.classList.remove('fas', 'fa-stop');
+        mediumIcon.classList.add('fab', 'fa-medium');
+    }
+
     if (this.waveformDrawingId) {
       cancelAnimationFrame(this.waveformDrawingId);
       this.waveformDrawingId = null;
@@ -1035,12 +1131,12 @@ class VoiceNotesApp {
           this.processAudio(audioBlob).catch((err) => {
             console.error('Error processing audio:', err);
             this.recordingStatus.textContent = 'Error processing recording';
-            if (this.recordingMode === 'atp') this.recordingMode = 'note';
+            if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
           });
         } else {
           this.recordingStatus.textContent =
             'No audio data captured. Please try again.';
-          if (this.recordingMode === 'atp') this.recordingMode = 'note';
+          if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
         }
 
         if (this.stream) {
@@ -1088,7 +1184,7 @@ class VoiceNotesApp {
       }
       this.recordButton.classList.remove('recording');
       this.recordButton.setAttribute('title', 'Start Recording');
-      if (this.recordingMode === 'atp') this.recordingMode = 'note';
+      if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
       this.stopLiveDisplay();
     }
   }
@@ -1100,7 +1196,7 @@ class VoiceNotesApp {
       } catch (e) {
         console.error('Error stopping MediaRecorder:', e);
         this.stopLiveDisplay();
-        if (this.recordingMode === 'atp') this.recordingMode = 'note';
+        if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
       }
 
       this.isRecording = false;
@@ -1110,7 +1206,7 @@ class VoiceNotesApp {
       this.recordingStatus.textContent = 'Processing audio...';
     } else {
       if (!this.isRecording) this.stopLiveDisplay();
-      if (this.recordingMode === 'atp') this.recordingMode = 'note';
+      if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
     }
   }
 
@@ -1119,7 +1215,7 @@ class VoiceNotesApp {
       this.recordingStatus.textContent =
         'No audio data captured. Please try again.';
       this.resetPlayback();
-      if (this.recordingMode === 'atp') this.recordingMode = 'note';
+      if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
       return;
     }
     
@@ -1155,7 +1251,7 @@ class VoiceNotesApp {
       console.error('Error in processAudio:', error);
       this.recordingStatus.textContent =
         'Error processing recording. Please try again.';
-      if (this.recordingMode === 'atp') this.recordingMode = 'note';
+      if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
     }
   }
 
@@ -1188,6 +1284,30 @@ class VoiceNotesApp {
              this.recordingStatus.textContent = 'No context recorded for ATP.';
         }
         this.recordingMode = 'note';
+        const atpIcon = this.formatATPButton.querySelector('i');
+        if (atpIcon) {
+          atpIcon.classList.remove('fa-stop');
+          atpIcon.classList.add('fa-brain');
+        }
+        this.formatATPButton.classList.remove('speaking');
+        return;
+      }
+
+      if (this.recordingMode === 'medium') {
+        if (transcriptionText) {
+            this.recordingStatus.textContent = 'Generating Medium Post...';
+            await this.formatAsMediumPost(transcriptionText);
+            this.recordingStatus.textContent = 'Medium Post Formatting Complete.';
+        } else {
+             this.recordingStatus.textContent = 'No context recorded for Medium post.';
+        }
+        this.recordingMode = 'note';
+        const mediumIcon = this.formatMediumButton.querySelector('i');
+        if (mediumIcon) {
+          mediumIcon.classList.remove('fas', 'fa-stop');
+          mediumIcon.classList.add('fab', 'fa-medium');
+        }
+        this.formatMediumButton.classList.remove('speaking');
         return;
       }
 
@@ -1235,7 +1355,7 @@ class VoiceNotesApp {
       this.rawTranscription.textContent =
         this.rawTranscription.getAttribute('placeholder');
       this.rawTranscription.classList.add('placeholder-active');
-      if (this.recordingMode === 'atp') this.recordingMode = 'note';
+      if (this.recordingMode === 'atp' || this.recordingMode === 'medium') this.recordingMode = 'note';
     }
   }
 
@@ -1833,7 +1953,263 @@ ${textToFormat}`;
       this.recordingStatus.textContent = `Error formatting: ${errorMessage}`;
     }
   }
-  
+
+  private async toggleMediumRecording(): Promise<void> {
+    const noteText = this.polishedNote.innerText;
+    if (!noteText || this.polishedNote.classList.contains('placeholder-active')) {
+      alert('Please create a note first before formatting as Medium post.');
+      return;
+    }
+
+    if (this.isRecording) {
+      if (this.recordingMode === 'medium') {
+        await this.stopRecording();
+      } else {
+        alert('Please finish your current recording first.');
+      }
+    } else {
+      this.recordingMode = 'medium';
+      this.formatMediumButton.classList.add('speaking');
+      const icon = this.formatMediumButton.querySelector('i');
+      if (icon) {
+        icon.classList.remove('fab', 'fa-medium');
+        icon.classList.add('fas', 'fa-stop');
+      }
+      await this.startRecording();
+    }
+  }
+
+  private async formatAsMediumPost(additionalContext: string = ''): Promise<void> {
+    const noteText = this.polishedNote.innerText;
+
+    if (!noteText || this.polishedNote.classList.contains('placeholder-active')) {
+      alert('Please create a note first before formatting as Medium post.');
+      return;
+    }
+
+    this.recordingStatus.textContent = 'Formatting as Medium Post with KB Context...';
+
+    let textToFormat = noteText;
+    if (noteText.trim().startsWith('[[Mode]]:')) {
+      const separator = '\n---\n';
+      const parts = noteText.split(separator);
+      if (parts.length > 1) {
+        textToFormat = parts.slice(1).join(separator).trim();
+      }
+    }
+
+    if (!textToFormat) {
+      this.recordingStatus.textContent = 'No content to format.';
+      return;
+    }
+
+    const knowledgeBaseContext = this.serializeKnowledgeBase(this.knowledgeBaseData);
+
+    try {
+      const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
+      const prompt = `You are an expert Medium.com content editor and SEO specialist. Transform the user's rambling voice note into a polished, publication-ready Medium post.
+
+**CRITICAL TASK:** Use the Knowledge Base to:
+1. Find related topics and posts for internal linking
+2. Maintain consistency with the user's existing writing themes
+3. Suggest relevant connections to other content
+4. Extract topic patterns for better tagging
+
+**1. Knowledge Base (Reference Material):**
+Use this to discover related content, identify themes, and suggest internal links.
+<KnowledgeBase>
+${knowledgeBaseContext}
+</KnowledgeBase>
+
+**2. User Instruction (Optional Context):**
+"${additionalContext ? additionalContext : "No specific instruction - use your best judgment for Medium optimization."}"
+
+**3. Raw Note Content:**
+<Note>
+${textToFormat}
+</Note>
+
+**4. Output Requirements:**
+Generate a JSON object with:
+- **title**: SEO-optimized headline (60 chars max, attention-grabbing)
+- **subtitle**: Compelling subheading (140 chars max, clarifies value)
+- **tags**: Array of 1-5 Medium tags (lowercase, specific topics)
+- **sections**: Array of section objects with:
+  - sectionTitle: H2 heading
+  - content: Restructured content for that section (markdown)
+- **relatedKbTopics**: Array of objects with:
+  - topicName: Topic from KB
+  - kbPath: File/folder path in KB
+  - relevance: Why it's related (one sentence)
+- **suggestedInternalLinks**: Array of strings suggesting where to link to KB content
+- **metaInsight**: One-sentence insight about how this fits into the user's knowledge ecosystem
+
+**Style Guidelines:**
+- Use Medium's conversational, storytelling tone
+- Break rambling into logical narrative flow
+- Add transition phrases between sections
+- Use markdown for emphasis (bold, italic, code blocks, quotes)
+- Include hook in first paragraph
+- End with clear takeaway or call-to-action`;
+
+      const response = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents: [{ text: prompt }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              subtitle: { type: Type.STRING },
+              tags: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              sections: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    sectionTitle: { type: Type.STRING },
+                    content: { type: Type.STRING }
+                  },
+                  required: ['sectionTitle', 'content']
+                }
+              },
+              relatedKbTopics: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    topicName: { type: Type.STRING },
+                    kbPath: { type: Type.STRING },
+                    relevance: { type: Type.STRING }
+                  },
+                  required: ['topicName', 'kbPath', 'relevance']
+                }
+              },
+              suggestedInternalLinks: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              metaInsight: { type: Type.STRING }
+            },
+            required: [
+              'title',
+              'subtitle',
+              'tags',
+              'sections',
+              'relatedKbTopics',
+              'suggestedInternalLinks',
+              'metaInsight'
+            ]
+          }
+        }
+      });
+
+      const jsonStr = response.text.trim();
+      const mediumData = JSON.parse(jsonStr);
+
+      if (!mediumData.title || !mediumData.sections || mediumData.sections.length === 0) {
+        throw new Error('Invalid response format from AI - missing required fields');
+      }
+
+      const tagsFormatted = mediumData.tags.map((tag: string) => `#${tag}`).join(' ');
+
+      const sectionsFormatted = mediumData.sections
+        .map((section: any) => `## ${section.sectionTitle}\n\n${section.content}`)
+        .join('\n\n');
+
+      let relatedTopicsFormatted = '';
+      if (mediumData.relatedKbTopics && mediumData.relatedKbTopics.length > 0) {
+        relatedTopicsFormatted = '\n\n---\n\n### Related Topics from Your Knowledge Base\n\n' +
+          mediumData.relatedKbTopics.map((topic: any) =>
+            `- **${topic.topicName}** (${topic.kbPath}): ${topic.relevance}`
+          ).join('\n');
+      }
+
+      let linksFormatted = '';
+      if (mediumData.suggestedInternalLinks && mediumData.suggestedInternalLinks.length > 0) {
+        linksFormatted = '\n\n### Suggested Internal Links\n\n' +
+          mediumData.suggestedInternalLinks.map((link: string) => `- ${link}`).join('\n');
+      }
+
+      const formattedMedium = `# ${mediumData.title}
+
+## ${mediumData.subtitle}
+
+**Tags:** ${tagsFormatted}
+
+---
+
+${sectionsFormatted}
+
+---
+
+${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}${relatedTopicsFormatted}${linksFormatted}
+
+---
+
+**User Instruction:** ${additionalContext || "N/A"}`;
+
+      const currentNote = this.currentNote;
+      if (currentNote) {
+        currentNote.polishedNote = formattedMedium;
+      }
+      this.polishedNote.innerHTML = await marked.parse(formattedMedium);
+      void this.persistPolishedEntry(currentNote?.polishedNote || formattedMedium);
+      if (this.polishedNote.innerText.trim()) {
+        this.polishedNote.classList.remove('placeholder-active');
+      }
+
+      this.recordingStatus.textContent = 'Note formatted as Medium Post.';
+
+      const polishedTabButton = document.querySelector('.tab-button[data-tab="note"]');
+      if (
+        polishedTabButton &&
+        !polishedTabButton.classList.contains('active')
+      ) {
+        this.setActiveTab(polishedTabButton as HTMLButtonElement);
+      }
+    } catch (error) {
+      console.error('Error formatting as Medium post:', error);
+      const errorMessage =
+        error instanceof Error ? error.message : 'An unknown error occurred.';
+      this.recordingStatus.textContent = `Error formatting: ${errorMessage}`;
+
+      this.formatMediumButton.classList.remove('speaking');
+      const icon = this.formatMediumButton.querySelector('i');
+      if (icon) {
+        icon.classList.remove('fas', 'fa-stop');
+        icon.classList.add('fab', 'fa-medium');
+      }
+    }
+  }
+
+  private async refreshPolishedContent(): Promise<void> {
+    const rawText = this.rawTranscription.innerText;
+
+    if (!rawText || this.rawTranscription.classList.contains('placeholder-active')) {
+      alert('No raw transcription available to refresh. Please record a note first.');
+      return;
+    }
+
+    if (this.isRecording) {
+      alert('Cannot refresh while recording. Please stop the recording first.');
+      return;
+    }
+
+    this.recordingStatus.textContent = 'Refreshing polished content from raw transcription...';
+
+    await this.getPolishedNote(rawText);
+
+    const polishedTabButton = document.querySelector('.tab-button[data-tab="note"]');
+    if (polishedTabButton && !polishedTabButton.classList.contains('active')) {
+      this.setActiveTab(polishedTabButton as HTMLButtonElement);
+    }
+  }
+
   private async startVideoGeneration(): Promise<void> {
     const prompt = this.polishedNote.innerText;
 

@@ -27,6 +27,7 @@ View your app in AI Studio: https://ai.studio/apps/drive/1dapkXq47nlX2ZVEsw-2gkF
 3. Start the desktop app (uses Vite dev server):
    `npm run desktop:dev`
 4. Desktop builds store data in a local SQLite DB under the Electron user data directory.
+5. Knowledge base files live in `kb/` (project root in dev); edits are synced into SQLite.
 
 ## Build Desktop App
 

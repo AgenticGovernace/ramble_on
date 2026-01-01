@@ -1,11 +1,17 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const fsp = require('fs/promises');
+const crypto = require('crypto');
+const chokidar = require('chokidar');
 const Database = require('better-sqlite3');
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:3000';
 
 let db = null;
 let statements = null;
+let mainWindow = null;
+let kbWatcher = null;
 
 const initDatabase = () => {
   const dbPath = path.join(app.getPath('userData'), 'ramble-on.sqlite');
@@ -43,6 +49,13 @@ const initDatabase = () => {
       created_at INTEGER NOT NULL,
       source TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS knowledge_base_files (
+      path TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      hash TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
 
   statements = {
@@ -70,15 +83,132 @@ const initDatabase = () => {
         created_at = excluded.created_at,
         note_id = excluded.note_id
     `),
-    insertKnowledgeBase: db.prepare(`
-      INSERT INTO knowledge_base_snapshots (content, created_at, source)
-      VALUES (@content, @created_at, @source)
+    upsertKnowledgeBaseFile: db.prepare(`
+      INSERT INTO knowledge_base_files (path, content, hash, updated_at)
+      VALUES (@path, @content, @hash, @updated_at)
+      ON CONFLICT(path) DO UPDATE SET
+        content = excluded.content,
+        hash = excluded.hash,
+        updated_at = excluded.updated_at
+    `),
+    deleteKnowledgeBaseFile: db.prepare(`
+      DELETE FROM knowledge_base_files WHERE path = @path
     `),
   };
 };
 
+const getKbRoot = () =>
+  app.isPackaged
+    ? path.join(app.getPath('userData'), 'kb')
+    : path.join(app.getAppPath(), 'kb');
+
+const ensureKbRoot = async () => {
+  const kbRoot = getKbRoot();
+  await fsp.mkdir(kbRoot, { recursive: true });
+  return kbRoot;
+};
+
+const readKbTree = async (dir, rootDir) => {
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  const items = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const children = await readKbTree(fullPath, rootDir);
+      items.push({
+        type: 'folder',
+        name: entry.name,
+        children,
+      });
+    } else if (entry.isFile()) {
+      const content = await fsp.readFile(fullPath, 'utf8');
+      items.push({
+        type: 'file',
+        name: entry.name,
+        content,
+        path: path.relative(rootDir, fullPath),
+      });
+    }
+  }
+
+  return items;
+};
+
+const hashContent = (content) =>
+  crypto.createHash('sha256').update(content).digest('hex');
+
+const syncKbFileToDb = async (filePath, kbRoot) => {
+  if (!db || !statements) return;
+  const content = await fsp.readFile(filePath, 'utf8');
+  const relativePath = path.relative(kbRoot, filePath);
+  statements.upsertKnowledgeBaseFile.run({
+    path: relativePath,
+    content,
+    hash: hashContent(content),
+    updated_at: Date.now(),
+  });
+};
+
+const syncKbDirectoryToDb = async (kbRoot) => {
+  const entries = await fsp.readdir(kbRoot, { withFileTypes: true });
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.name.startsWith('.')) return;
+      const fullPath = path.join(kbRoot, entry.name);
+      if (entry.isDirectory()) {
+        await syncKbDirectoryToDb(fullPath);
+      } else if (entry.isFile()) {
+        await syncKbFileToDb(fullPath, kbRoot);
+      }
+    }),
+  );
+};
+
+const startKbWatcher = async () => {
+  const kbRoot = await ensureKbRoot();
+  await syncKbDirectoryToDb(kbRoot);
+
+  kbWatcher = chokidar.watch(kbRoot, {
+    ignoreInitial: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 300,
+      pollInterval: 100,
+    },
+  });
+
+  kbWatcher.on('add', async (filePath) => {
+    try {
+      if (fs.statSync(filePath).isFile()) {
+        await syncKbFileToDb(filePath, kbRoot);
+        mainWindow?.webContents.send('kb:updated');
+      }
+    } catch (error) {
+      console.warn('KB add event failed:', error);
+    }
+  });
+
+  kbWatcher.on('change', async (filePath) => {
+    try {
+      if (fs.statSync(filePath).isFile()) {
+        await syncKbFileToDb(filePath, kbRoot);
+        mainWindow?.webContents.send('kb:updated');
+      }
+    } catch (error) {
+      console.warn('KB change event failed:', error);
+    }
+  });
+
+  kbWatcher.on('unlink', async (filePath) => {
+    const relativePath = path.relative(kbRoot, filePath);
+    statements?.deleteKnowledgeBaseFile.run({ path: relativePath });
+    mainWindow?.webContents.send('kb:updated');
+  });
+};
+
 const createWindow = () => {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     webPreferences: {
@@ -88,9 +218,9 @@ const createWindow = () => {
   });
 
   if (app.isPackaged) {
-    win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   } else {
-    win.loadURL(devServerUrl);
+    mainWindow.loadURL(devServerUrl);
   }
 };
 
@@ -127,13 +257,23 @@ const registerIpcHandlers = () => {
     });
   });
 
-  ipcMain.handle('db:save-knowledge-base', (_event, payload) => {
-    if (!db || !statements) return;
-    statements.insertKnowledgeBase.run({
-      content: payload.content || '',
-      created_at: payload.createdAt || Date.now(),
-      source: payload.source || 'app',
-    });
+  ipcMain.handle('kb:get-tree', async () => {
+    const kbRoot = await ensureKbRoot();
+    const tree = await readKbTree(kbRoot, kbRoot);
+    return { rootPath: kbRoot, tree };
+  });
+
+  ipcMain.handle('kb:write-file', async (_event, payload) => {
+    const kbRoot = await ensureKbRoot();
+    const filePath = path.join(kbRoot, payload.relativePath);
+
+    // Ensure parent directory exists
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+
+    // Write file content
+    await fsp.writeFile(filePath, payload.content, 'utf8');
+
+    return { success: true };
   });
 };
 
@@ -141,6 +281,7 @@ app.whenReady().then(() => {
   initDatabase();
   registerIpcHandlers();
   createWindow();
+  startKbWatcher();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -152,5 +293,13 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  if (kbWatcher) {
+    kbWatcher.close().catch((error) => {
+      console.warn('Failed to close KB watcher:', error);
+    });
   }
 });

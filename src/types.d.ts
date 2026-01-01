@@ -21,11 +21,21 @@ declare global {
         content: string;
         createdAt?: number;
       }) => Promise<void>;
-      saveKnowledgeBase: (payload: {
+      getKnowledgeBase: () => Promise<{
+        rootPath: string;
+        tree: Array<{
+          type: 'folder' | 'file';
+          name: string;
+          children?: any[];
+          content?: string;
+          path?: string;
+        }>;
+      }>;
+      writeKnowledgeBaseFile: (payload: {
+        relativePath: string;
         content: string;
-        createdAt?: number;
-        source?: string;
-      }) => Promise<void>;
+      }) => Promise<{ success: boolean }>;
+      onKnowledgeBaseUpdated: (callback: () => void) => void;
     };
   }
 }

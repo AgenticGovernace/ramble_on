@@ -5,6 +5,7 @@
 - `src/main.tsx` contains the main TypeScript/DOM logic (single-file app).
 - `src/index.css` holds global styles.
 - `electron/main.cjs` is the Electron main process entry.
+- `kb/` is the on-disk Knowledge Base; edits are mirrored into SQLite.
 - SQLite data is stored under the Electron user data path (created at runtime).
 - `tests/` contains Vitest checks.
 - Root configs: `package.json`, `vite.config.ts`, `tsconfig.json`, and `metadata.json`.
