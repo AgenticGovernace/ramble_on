@@ -6,12 +6,43 @@ const crypto = require('crypto');
 const chokidar = require('chokidar');
 const Database = require('better-sqlite3');
 
-const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:3000';
+const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 
 let db = null;
 let statements = null;
 let mainWindow = null;
 let kbWatcher = null;
+
+const toPosixPath = (filePath) => filePath.split(path.sep).join('/');
+
+const resolveKbPath = (relativePath = '') => {
+  const kbRoot = getKbRoot();
+  const normalized = path.posix.normalize(String(relativePath).replace(/\\/g, '/'));
+
+  if (normalized === '.' || normalized === '') {
+    return { kbRoot, relativePath: '', absolutePath: kbRoot };
+  }
+
+  if (path.posix.isAbsolute(normalized) || normalized.startsWith('..')) {
+    throw new Error('Invalid Knowledge Base path.');
+  }
+
+  const absolutePath = path.resolve(kbRoot, ...normalized.split('/'));
+  const resolvedRoot = path.resolve(kbRoot);
+  if (absolutePath !== resolvedRoot && !absolutePath.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('Invalid Knowledge Base path.');
+  }
+
+  return { kbRoot, relativePath: normalized, absolutePath };
+};
+
+const sanitizeEntryName = (name) => {
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) throw new Error('Name is required.');
+  if (trimmed === '.' || trimmed === '..') throw new Error('Invalid name.');
+  if (trimmed.includes('/') || trimmed.includes('\\')) throw new Error('Name must not contain slashes.');
+  return trimmed;
+};
 
 const initDatabase = () => {
   const dbPath = path.join(app.getPath('userData'), 'ramble-on.sqlite');
@@ -115,11 +146,13 @@ const readKbTree = async (dir, rootDir) => {
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const fullPath = path.join(dir, entry.name);
+    const relativePosix = toPosixPath(path.relative(rootDir, fullPath));
     if (entry.isDirectory()) {
       const children = await readKbTree(fullPath, rootDir);
       items.push({
         type: 'folder',
         name: entry.name,
+        path: relativePosix,
         children,
       });
     } else if (entry.isFile()) {
@@ -128,7 +161,7 @@ const readKbTree = async (dir, rootDir) => {
         type: 'file',
         name: entry.name,
         content,
-        path: path.relative(rootDir, fullPath),
+        path: relativePosix,
       });
     }
   }
@@ -164,6 +197,21 @@ const syncKbDirectoryToDb = async (kbRoot) => {
       }
     }),
   );
+};
+
+const listKbFilesRecursive = async (dir) => {
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  const filePaths = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      filePaths.push(...(await listKbFilesRecursive(fullPath)));
+    } else if (entry.isFile()) {
+      filePaths.push(fullPath);
+    }
+  }
+  return filePaths;
 };
 
 const startKbWatcher = async () => {
@@ -265,7 +313,7 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('kb:write-file', async (_event, payload) => {
     const kbRoot = await ensureKbRoot();
-    const filePath = path.join(kbRoot, payload.relativePath);
+    const { absolutePath: filePath } = resolveKbPath(payload.relativePath);
 
     // Ensure parent directory exists
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
@@ -274,6 +322,85 @@ const registerIpcHandlers = () => {
     await fsp.writeFile(filePath, payload.content, 'utf8');
 
     return { success: true };
+  });
+
+  ipcMain.handle('kb:create-folder', async (_event, payload) => {
+    const kbRoot = await ensureKbRoot();
+    const parentRelative = payload?.parentPath ? resolveKbPath(payload.parentPath).relativePath : '';
+    const folderName = sanitizeEntryName(payload?.name);
+    const newRelative = parentRelative ? `${parentRelative}/${folderName}` : folderName;
+    const { absolutePath: folderPath } = resolveKbPath(newRelative);
+    await fsp.mkdir(folderPath, { recursive: false });
+    await syncKbDirectoryToDb(kbRoot);
+    mainWindow?.webContents.send('kb:updated');
+    return { success: true, path: newRelative };
+  });
+
+  ipcMain.handle('kb:create-file', async (_event, payload) => {
+    const kbRoot = await ensureKbRoot();
+    const parentRelative = payload?.parentPath ? resolveKbPath(payload.parentPath).relativePath : '';
+    const fileName = sanitizeEntryName(payload?.name);
+    const newRelative = parentRelative ? `${parentRelative}/${fileName}` : fileName;
+    const { absolutePath: filePath } = resolveKbPath(newRelative);
+    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    await fsp.writeFile(filePath, payload?.content ?? '', 'utf8');
+    await syncKbFileToDb(filePath, kbRoot);
+    mainWindow?.webContents.send('kb:updated');
+    return { success: true, path: newRelative };
+  });
+
+  ipcMain.handle('kb:delete-path', async (_event, payload) => {
+    const kbRoot = await ensureKbRoot();
+    const { absolutePath: targetPath, relativePath } = resolveKbPath(payload?.relativePath);
+    const stat = await fsp.stat(targetPath);
+
+    if (stat.isDirectory()) {
+      const files = await listKbFilesRecursive(targetPath);
+      for (const filePath of files) {
+        const rel = toPosixPath(path.relative(kbRoot, filePath));
+        statements?.deleteKnowledgeBaseFile.run({ path: rel });
+      }
+      await fsp.rm(targetPath, { recursive: true, force: false });
+    } else {
+      statements?.deleteKnowledgeBaseFile.run({ path: relativePath });
+      await fsp.unlink(targetPath);
+    }
+
+    mainWindow?.webContents.send('kb:updated');
+    return { success: true };
+  });
+
+  ipcMain.handle('kb:rename-path', async (_event, payload) => {
+    const kbRoot = await ensureKbRoot();
+    const { absolutePath: targetPath, relativePath } = resolveKbPath(payload?.relativePath);
+    const newName = sanitizeEntryName(payload?.newName);
+
+    const parentRelative = path.posix.dirname(relativePath) === '.' ? '' : path.posix.dirname(relativePath);
+    const newRelative = parentRelative ? `${parentRelative}/${newName}` : newName;
+    const { absolutePath: newPath } = resolveKbPath(newRelative);
+
+    const stat = await fsp.stat(targetPath);
+    if (stat.isDirectory()) {
+      const beforeFiles = await listKbFilesRecursive(targetPath);
+      const beforeRelatives = beforeFiles.map((filePath) => toPosixPath(path.relative(kbRoot, filePath)));
+
+      await fsp.rename(targetPath, newPath);
+
+      const afterFiles = await listKbFilesRecursive(newPath);
+      for (const filePath of afterFiles) {
+        await syncKbFileToDb(filePath, kbRoot);
+      }
+      for (const oldRel of beforeRelatives) {
+        statements?.deleteKnowledgeBaseFile.run({ path: oldRel });
+      }
+    } else {
+      await fsp.rename(targetPath, newPath);
+      await syncKbFileToDb(newPath, kbRoot);
+      statements?.deleteKnowledgeBaseFile.run({ path: relativePath });
+    }
+
+    mainWindow?.webContents.send('kb:updated');
+    return { success: true, path: newRelative };
   });
 };
 

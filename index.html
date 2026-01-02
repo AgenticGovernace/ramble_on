@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Dictation App</title>
+    <title>Ramble On</title>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -24,7 +24,12 @@
     <div class="app-container">
       <div class="app-main-wrapper">
         <div class="sidebar" id="knowledgeBaseSidebar">
-          <h3 class="sidebar-title">Knowledge Base</h3>
+          <div class="sidebar-header">
+            <h3 class="sidebar-title">Knowledge Base</h3>
+            <button class="sidebar-action-button" id="openKbManagerButton" title="Manage Knowledge Base">
+              <i class="fas fa-folder-tree"></i>
+            </button>
+          </div>
           <div class="folder-tree-container" id="folderTree"></div>
         </div>
         <div class="resizer" id="resizer"></div>
@@ -205,6 +210,40 @@
         </div>
         <div id="modalErrorState" class="modal-state hidden">
           <p id="modalErrorText"></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="kbManagerModal" class="modal-overlay hidden">
+      <div class="modal-content kb-manager-modal">
+        <button id="closeKbManagerButton" class="modal-close-button">&times;</button>
+        <h2>Manage Knowledge Base</h2>
+        <div class="kb-manager-body">
+          <div class="kb-manager-tree-panel">
+            <div id="kbManagerTree" class="kb-manager-tree"></div>
+          </div>
+          <div class="kb-manager-actions-panel">
+            <div class="kb-manager-selection">
+              <div class="kb-manager-selection-label">Selected</div>
+              <div id="kbManagerSelectedPath" class="kb-manager-selection-path">/</div>
+            </div>
+            <div class="kb-manager-action-grid">
+              <button id="kbManagerNewFolder" class="kb-manager-action-button">New Folder</button>
+              <button id="kbManagerNewFile" class="kb-manager-action-button">New File</button>
+              <button id="kbManagerRename" class="kb-manager-action-button" disabled>Rename</button>
+              <button id="kbManagerDelete" class="kb-manager-action-button" disabled>Delete</button>
+              <button id="kbManagerOpen" class="kb-manager-action-button" disabled>Open</button>
+            </div>
+            <div id="kbManagerForm" class="kb-manager-form hidden">
+              <div id="kbManagerFormTitle" class="kb-manager-form-title"></div>
+              <input id="kbManagerFormName" class="kb-manager-form-input" type="text" />
+              <div class="kb-manager-form-buttons">
+                <button id="kbManagerFormCancel" class="kb-manager-form-button secondary" type="button">Cancel</button>
+                <button id="kbManagerFormConfirm" class="kb-manager-form-button primary" type="button">Confirm</button>
+              </div>
+              <div id="kbManagerFormHint" class="kb-manager-form-hint"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

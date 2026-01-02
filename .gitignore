@@ -32,3 +32,4 @@ CLAUDE.md
 package-lock.json
 src/main.tsx
 AGENTS.md
+/build

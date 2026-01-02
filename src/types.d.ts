@@ -35,6 +35,22 @@ declare global {
         relativePath: string;
         content: string;
       }) => Promise<{ success: boolean }>;
+      createKnowledgeBaseFolder: (payload: {
+        parentPath?: string;
+        name: string;
+      }) => Promise<{ success: boolean; path: string }>;
+      createKnowledgeBaseFile: (payload: {
+        parentPath?: string;
+        name: string;
+        content?: string;
+      }) => Promise<{ success: boolean; path: string }>;
+      deleteKnowledgeBasePath: (payload: {
+        relativePath: string;
+      }) => Promise<{ success: boolean }>;
+      renameKnowledgeBasePath: (payload: {
+        relativePath: string;
+        newName: string;
+      }) => Promise<{ success: boolean; path: string }>;
       onKnowledgeBaseUpdated: (callback: () => void) => void;
     };
   }

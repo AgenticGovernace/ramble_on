@@ -182,13 +182,45 @@ body {
   flex-shrink: 0;
 }
 
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 12px 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
 .sidebar-title {
   font-size: 16px;
   font-weight: 600;
-  padding: 16px 20px;
   color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar-action-button {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-fast) background-color, var(--transition-fast) color, var(--transition-fast) border-color;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.sidebar-action-button:hover {
+  color: var(--color-text);
+  background-color: var(--color-surface-hover);
+  border-color: var(--glass-highlight);
 }
 
 .folder-tree-container {
@@ -229,6 +261,11 @@ body {
 
 .tree-item:hover {
   background-color: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.tree-item.selected {
+  background-color: var(--color-surface-active);
   color: var(--color-text);
 }
 
@@ -1242,6 +1279,148 @@ body.dark-mode input:checked+.slider:before {
 
 .button-primary:hover {
   filter: brightness(0.9);
+}
+
+/* Knowledge Base Manager */
+.kb-manager-modal {
+  max-width: 900px;
+  text-align: left;
+}
+
+.kb-manager-body {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.kb-manager-tree-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 12px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.kb-manager-tree .folder-tree {
+  padding-left: 0;
+}
+
+.kb-manager-tree .folder-tree ul {
+  padding-left: 18px;
+}
+
+.kb-manager-actions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.kb-manager-selection-label {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 6px;
+}
+
+.kb-manager-selection-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  word-break: break-word;
+}
+
+.kb-manager-action-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.kb-manager-action-button {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: var(--transition-fast) background-color, var(--transition-fast) border-color, var(--transition-fast) transform;
+}
+
+.kb-manager-action-button:hover:not(:disabled) {
+  background-color: var(--color-surface-hover);
+  border-color: var(--glass-highlight);
+  transform: translateY(-1px);
+}
+
+.kb-manager-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kb-manager-form {
+  background: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.kb-manager-form-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 10px;
+}
+
+.kb-manager-form-input {
+  width: 100%;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--color-text);
+  outline: none;
+}
+
+.kb-manager-form-input:focus {
+  border-color: var(--glass-highlight);
+}
+
+.kb-manager-form-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.kb-manager-form-button {
+  border-radius: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: var(--transition-fast) background-color, var(--transition-fast) border-color;
+}
+
+.kb-manager-form-button.primary {
+  background-color: var(--color-accent);
+  border-color: transparent;
+  color: white;
+}
+
+.kb-manager-form-button.secondary:hover,
+.kb-manager-form-button.primary:hover {
+  filter: brightness(0.95);
+}
+
+.kb-manager-form-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
 }
 
 .visualization-controls {

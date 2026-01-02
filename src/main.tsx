@@ -109,6 +109,25 @@ class VoiceNotesApp {
   private saveKbButton: HTMLButtonElement;
   private currentKbFile: KnowledgeBaseItem | null = null;
 
+  private openKbManagerButton: HTMLButtonElement;
+  private kbManagerModal: HTMLDivElement;
+  private closeKbManagerButton: HTMLButtonElement;
+  private kbManagerTree: HTMLDivElement;
+  private kbManagerSelectedPath: HTMLDivElement;
+  private kbManagerNewFolder: HTMLButtonElement;
+  private kbManagerNewFile: HTMLButtonElement;
+  private kbManagerRename: HTMLButtonElement;
+  private kbManagerDelete: HTMLButtonElement;
+  private kbManagerOpen: HTMLButtonElement;
+  private kbManagerForm: HTMLDivElement;
+  private kbManagerFormTitle: HTMLDivElement;
+  private kbManagerFormName: HTMLInputElement;
+  private kbManagerFormCancel: HTMLButtonElement;
+  private kbManagerFormConfirm: HTMLButtonElement;
+  private kbManagerFormHint: HTMLDivElement;
+  private kbManagerSelectedItem: KnowledgeBaseItem | null = null;
+  private kbManagerFormMode: 'new-folder' | 'new-file' | 'rename' | 'delete' | null = null;
+
   private tabContainer: HTMLElement;
   private tabButtons: NodeListOf<HTMLButtonElement>;
   private activeTabIndicator: HTMLDivElement;
@@ -232,6 +251,23 @@ class VoiceNotesApp {
     this.kbContentEditor = document.getElementById('kbContentEditor') as HTMLTextAreaElement;
     this.saveKbButton = document.getElementById('saveKbButton') as HTMLButtonElement;
 
+    this.openKbManagerButton = document.getElementById('openKbManagerButton') as HTMLButtonElement;
+    this.kbManagerModal = document.getElementById('kbManagerModal') as HTMLDivElement;
+    this.closeKbManagerButton = document.getElementById('closeKbManagerButton') as HTMLButtonElement;
+    this.kbManagerTree = document.getElementById('kbManagerTree') as HTMLDivElement;
+    this.kbManagerSelectedPath = document.getElementById('kbManagerSelectedPath') as HTMLDivElement;
+    this.kbManagerNewFolder = document.getElementById('kbManagerNewFolder') as HTMLButtonElement;
+    this.kbManagerNewFile = document.getElementById('kbManagerNewFile') as HTMLButtonElement;
+    this.kbManagerRename = document.getElementById('kbManagerRename') as HTMLButtonElement;
+    this.kbManagerDelete = document.getElementById('kbManagerDelete') as HTMLButtonElement;
+    this.kbManagerOpen = document.getElementById('kbManagerOpen') as HTMLButtonElement;
+    this.kbManagerForm = document.getElementById('kbManagerForm') as HTMLDivElement;
+    this.kbManagerFormTitle = document.getElementById('kbManagerFormTitle') as HTMLDivElement;
+    this.kbManagerFormName = document.getElementById('kbManagerFormName') as HTMLInputElement;
+    this.kbManagerFormCancel = document.getElementById('kbManagerFormCancel') as HTMLButtonElement;
+    this.kbManagerFormConfirm = document.getElementById('kbManagerFormConfirm') as HTMLButtonElement;
+    this.kbManagerFormHint = document.getElementById('kbManagerFormHint') as HTMLDivElement;
+
     this.tabContainer = document.querySelector('.tab-navigation') as HTMLElement;
     this.tabButtons = this.tabContainer.querySelectorAll('.tab-button');
     this.activeTabIndicator = this.tabContainer.querySelector('.active-tab-indicator') as HTMLDivElement;
@@ -309,6 +345,34 @@ class VoiceNotesApp {
     this.refreshPolishedButton.addEventListener('click', () => this.refreshPolishedContent());
     this.saveKbButton.addEventListener('click', () => this.saveKnowledgeBaseFile());
     this.kbContentDisplay.addEventListener('dblclick', () => this.enableKbEditing());
+    this.openKbManagerButton.addEventListener('click', () => {
+      void this.showKbManager();
+    });
+    this.closeKbManagerButton.addEventListener('click', () => this.hideKbManager());
+    this.kbManagerModal.addEventListener('click', (e) => {
+      if (e.target === this.kbManagerModal) {
+        this.hideKbManager();
+      }
+    });
+    this.kbManagerNewFolder.addEventListener('click', () => this.openKbManagerForm('new-folder'));
+    this.kbManagerNewFile.addEventListener('click', () => this.openKbManagerForm('new-file'));
+    this.kbManagerRename.addEventListener('click', () => this.openKbManagerForm('rename'));
+    this.kbManagerDelete.addEventListener('click', () => this.openKbManagerForm('delete'));
+    this.kbManagerOpen.addEventListener('click', () => this.openKbManagerSelection());
+    this.kbManagerFormCancel.addEventListener('click', () => this.closeKbManagerForm());
+    this.kbManagerFormConfirm.addEventListener('click', () => {
+      void this.submitKbManagerForm();
+    });
+    this.kbManagerFormName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void this.submitKbManagerForm();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.closeKbManagerForm();
+      }
+    });
     this.closeModalButton.addEventListener('click', () => this.hideVideoModal());
     this.videoModal.addEventListener('click', (e) => {
         if (e.target === this.videoModal) {
@@ -421,10 +485,12 @@ class VoiceNotesApp {
 
   private buildKnowledgeBasePath(items: KnowledgeBaseItem[], parentPath = ''): void {
       items.forEach(item => {
-          const currentPath = `${parentPath}/${item.name}`;
+          const currentPath = parentPath ? `${parentPath}/${item.name}` : item.name;
           item.path = currentPath;
           if (item.type === 'folder') {
-              item.isOpen = false; // Ensure all folders are closed initially
+              if (typeof item.isOpen !== 'boolean') {
+                item.isOpen = false;
+              }
               if (item.children) {
                   this.buildKnowledgeBasePath(item.children, currentPath);
               }
@@ -437,6 +503,13 @@ class VoiceNotesApp {
     const treeRoot = this.createTreeElement(this.knowledgeBaseData);
     treeRoot.classList.add('folder-tree');
     this.folderTreeContainer.appendChild(treeRoot);
+  }
+
+  private renderKbManagerTree(): void {
+    this.kbManagerTree.innerHTML = '';
+    const treeRoot = this.createKbManagerTreeElement(this.knowledgeBaseData);
+    treeRoot.classList.add('folder-tree');
+    this.kbManagerTree.appendChild(treeRoot);
   }
 
   private createTreeElement(items: KnowledgeBaseItem[]): HTMLUListElement {
@@ -491,6 +564,63 @@ class VoiceNotesApp {
           ul.appendChild(li);
       });
       return ul;
+  }
+
+  private createKbManagerTreeElement(items: KnowledgeBaseItem[]): HTMLUListElement {
+    const ul = document.createElement('ul');
+    items.forEach(item => {
+      const li = document.createElement('li');
+      li.className = `tree-item-wrapper ${item.type === 'folder' ? 'folder-item' : 'file-item'}`;
+      if (item.type === 'folder' && item.isOpen) {
+        li.classList.add('open');
+      }
+
+      const itemDiv = document.createElement('div');
+      itemDiv.className = 'tree-item';
+      if (this.kbManagerSelectedItem?.path && item.path === this.kbManagerSelectedItem.path) {
+        itemDiv.classList.add('selected');
+      }
+
+      const icon = document.createElement('i');
+      if (item.type === 'folder') {
+        icon.className = 'fas fa-fw fa-chevron-right';
+      } else {
+        const spacer = document.createElement('span');
+        spacer.style.width = '1em';
+        spacer.style.marginRight = '8px';
+        spacer.style.display = 'inline-block';
+        itemDiv.appendChild(spacer);
+      }
+
+      const typeIcon = document.createElement('i');
+      typeIcon.className = `fas fa-fw ${item.type === 'folder' ? 'fa-folder' : 'fa-file-alt'}`;
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = item.name;
+
+      if (item.type === 'folder') {
+        itemDiv.appendChild(icon);
+      }
+      itemDiv.appendChild(typeIcon);
+      itemDiv.appendChild(nameSpan);
+      li.appendChild(itemDiv);
+
+      itemDiv.addEventListener('click', () => {
+        this.kbManagerSelectedItem = item;
+        this.updateKbManagerSelectionUI();
+        if (item.type === 'folder') {
+          item.isOpen = !item.isOpen;
+        }
+        this.renderKbManagerTree();
+      });
+
+      if (item.children && item.children.length > 0) {
+        const childrenUl = this.createKbManagerTreeElement(item.children);
+        li.appendChild(childrenUl);
+      }
+      ul.appendChild(li);
+    });
+    return ul;
   }
 
   private toggleFolder(folderItem: KnowledgeBaseItem): void {
@@ -672,6 +802,23 @@ class VoiceNotesApp {
         this.knowledgeBaseData = payload.tree;
         this.buildKnowledgeBasePath(this.knowledgeBaseData);
         this.renderKnowledgeBase();
+
+        if (this.kbManagerModal && !this.kbManagerModal.classList.contains('hidden')) {
+          if (this.kbManagerSelectedItem?.path) {
+            this.kbManagerSelectedItem = this.findKbItemByPath(this.knowledgeBaseData, this.kbManagerSelectedItem.path);
+            this.updateKbManagerSelectionUI();
+          }
+          this.renderKbManagerTree();
+        }
+
+        if (this.currentKbFile?.path) {
+          const refreshed = this.findKbItemByPath(this.knowledgeBaseData, this.currentKbFile.path);
+          if (refreshed && refreshed.type === 'file') {
+            this.currentKbFile = refreshed;
+          } else {
+            this.closeKbFileTab();
+          }
+        }
       }
     } catch (error) {
       console.warn('Failed to load knowledge base from disk:', error);
@@ -683,6 +830,201 @@ class VoiceNotesApp {
     window.rambleOnDB.onKnowledgeBaseUpdated(() => {
       void this.loadKnowledgeBaseFromDisk();
     });
+  }
+
+  private closeKbFileTab(): void {
+    this.currentKbFile = null;
+    this.knowledgeBaseTab.style.display = 'none';
+    this.knowledgeBaseTab.textContent = 'Knowledge';
+    this.knowledgeBaseTab.title = '';
+    if (this.kbContentEditor) {
+      this.kbContentEditor.style.display = 'none';
+    }
+    if (this.kbContentDisplay) {
+      this.kbContentDisplay.innerHTML = '';
+      this.kbContentDisplay.style.display = 'block';
+    }
+    this.saveKbButton.style.display = 'none';
+  }
+
+  private findKbItemByPath(items: KnowledgeBaseItem[], targetPath: string): KnowledgeBaseItem | null {
+    for (const item of items) {
+      if (item.path === targetPath) return item;
+      if (item.type === 'folder' && item.children?.length) {
+        const found = this.findKbItemByPath(item.children, targetPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  private async showKbManager(): Promise<void> {
+    if (!window.rambleOnDB?.getKnowledgeBase) {
+      alert('Knowledge Base management is only available in desktop mode.');
+      return;
+    }
+
+    this.kbManagerSelectedItem = null;
+    this.updateKbManagerSelectionUI();
+    this.kbManagerModal.classList.remove('hidden');
+    this.closeKbManagerForm();
+
+    await this.loadKnowledgeBaseFromDisk();
+    this.renderKbManagerTree();
+  }
+
+  private hideKbManager(): void {
+    this.kbManagerModal.classList.add('hidden');
+    this.closeKbManagerForm();
+  }
+
+  private updateKbManagerSelectionUI(): void {
+    const displayPath = this.kbManagerSelectedItem?.path ? `/${this.kbManagerSelectedItem.path}` : '/';
+    this.kbManagerSelectedPath.textContent = displayPath;
+    const hasSelection = Boolean(this.kbManagerSelectedItem?.path);
+    const isFile = this.kbManagerSelectedItem?.type === 'file';
+    this.kbManagerRename.disabled = !hasSelection;
+    this.kbManagerDelete.disabled = !hasSelection;
+    this.kbManagerOpen.disabled = !isFile;
+  }
+
+  private getKbManagerParentPath(): string {
+    const selected = this.kbManagerSelectedItem;
+    if (!selected?.path) return '';
+    if (selected.type === 'folder') return selected.path;
+    const parts = selected.path.split('/');
+    parts.pop();
+    return parts.join('/');
+  }
+
+  private openKbManagerForm(mode: 'new-folder' | 'new-file' | 'rename' | 'delete'): void {
+    if (!window.rambleOnDB) {
+      alert('Knowledge Base management is only available in desktop mode.');
+      return;
+    }
+
+    this.kbManagerFormMode = mode;
+    this.kbManagerForm.classList.remove('hidden');
+
+    const selectedName = this.kbManagerSelectedItem?.name ?? '';
+    const selectedPath = this.kbManagerSelectedItem?.path ?? '';
+    const parentPath = this.getKbManagerParentPath();
+    const parentLabel = parentPath ? `/${parentPath}` : '/';
+
+    this.kbManagerFormName.disabled = false;
+    this.kbManagerFormName.readOnly = false;
+
+    if (mode === 'new-folder') {
+      this.kbManagerFormTitle.textContent = 'Create a new folder';
+      this.kbManagerFormConfirm.textContent = 'Create Folder';
+      this.kbManagerFormName.value = 'New Folder';
+      this.kbManagerFormHint.textContent = `Location: ${parentLabel}`;
+    } else if (mode === 'new-file') {
+      this.kbManagerFormTitle.textContent = 'Create a new file';
+      this.kbManagerFormConfirm.textContent = 'Create File';
+      this.kbManagerFormName.value = 'new.md';
+      this.kbManagerFormHint.textContent = `Location: ${parentLabel}`;
+    } else if (mode === 'rename') {
+      if (!selectedPath) return;
+      this.kbManagerFormTitle.textContent = 'Rename selected item';
+      this.kbManagerFormConfirm.textContent = 'Rename';
+      this.kbManagerFormName.value = selectedName;
+      this.kbManagerFormHint.textContent = `Current: /${selectedPath}`;
+    } else if (mode === 'delete') {
+      if (!selectedPath) return;
+      this.kbManagerFormTitle.textContent = 'Delete selected item';
+      this.kbManagerFormConfirm.textContent = 'Delete';
+      this.kbManagerFormName.value = selectedName;
+      this.kbManagerFormName.readOnly = true;
+      this.kbManagerFormHint.textContent = `This cannot be undone: /${selectedPath}`;
+    }
+
+    requestAnimationFrame(() => {
+      this.kbManagerFormName.focus();
+      if (mode !== 'delete') {
+        this.kbManagerFormName.select();
+      }
+    });
+  }
+
+  private closeKbManagerForm(): void {
+    this.kbManagerFormMode = null;
+    this.kbManagerForm.classList.add('hidden');
+    this.kbManagerFormTitle.textContent = '';
+    this.kbManagerFormHint.textContent = '';
+    this.kbManagerFormName.value = '';
+    this.kbManagerFormName.disabled = false;
+    this.kbManagerFormName.readOnly = false;
+  }
+
+  private async submitKbManagerForm(): Promise<void> {
+    if (!window.rambleOnDB) return;
+    const mode = this.kbManagerFormMode;
+    if (!mode) return;
+
+    const name = this.kbManagerFormName.value.trim();
+    const selectedPath = this.kbManagerSelectedItem?.path ?? '';
+    const parentPath = this.getKbManagerParentPath();
+
+    try {
+      if (mode === 'new-folder') {
+        await window.rambleOnDB.createKnowledgeBaseFolder({
+          parentPath: parentPath || undefined,
+          name,
+        });
+      } else if (mode === 'new-file') {
+        const result = await window.rambleOnDB.createKnowledgeBaseFile({
+          parentPath: parentPath || undefined,
+          name,
+          content: '',
+        });
+        await this.loadKnowledgeBaseFromDisk();
+        const created = this.findKbItemByPath(this.knowledgeBaseData, result.path);
+        if (created && created.type === 'file') {
+          await this.openKnowledgeBaseFile(created);
+          this.enableKbEditing();
+          this.hideKbManager();
+        }
+      } else if (mode === 'rename') {
+        if (!selectedPath) return;
+        const result = await window.rambleOnDB.renameKnowledgeBasePath({
+          relativePath: selectedPath,
+          newName: name,
+        });
+        await this.loadKnowledgeBaseFromDisk();
+        if (this.currentKbFile?.path === selectedPath) {
+          const refreshed = this.findKbItemByPath(this.knowledgeBaseData, result.path);
+          if (refreshed && refreshed.type === 'file') {
+            await this.openKnowledgeBaseFile(refreshed);
+          } else {
+            this.closeKbFileTab();
+          }
+        }
+      } else if (mode === 'delete') {
+        if (!selectedPath) return;
+        await window.rambleOnDB.deleteKnowledgeBasePath({ relativePath: selectedPath });
+        if (this.currentKbFile?.path === selectedPath) {
+          this.closeKbFileTab();
+        }
+        this.kbManagerSelectedItem = null;
+        this.updateKbManagerSelectionUI();
+      }
+
+      this.closeKbManagerForm();
+      await this.loadKnowledgeBaseFromDisk();
+      this.renderKbManagerTree();
+    } catch (error) {
+      console.error('KB operation failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      alert(`Knowledge Base operation failed: ${errorMessage}`);
+    }
+  }
+
+  private openKbManagerSelection(): void {
+    const selected = this.kbManagerSelectedItem;
+    if (!selected || selected.type !== 'file') return;
+    void this.openKnowledgeBaseFile(selected);
+    this.hideKbManager();
   }
 
   private toggleAppendMode(): void {
