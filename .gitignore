@@ -33,3 +33,4 @@ package-lock.json
 src/main.tsx
 AGENTS.md
 /build
+.gitignore 19-35-31-358
