@@ -735,10 +735,42 @@ class VoiceNotesApp {
   }
 
   private generateUuid(): string {
+    // Prefer native cryptographically secure UUID when available
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
       return crypto.randomUUID();
     }
-    return `note_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+    // Fallback: generate a UUID-like value using crypto.getRandomValues
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      const buf = new Uint8Array(16);
+      crypto.getRandomValues(buf);
+
+      // Per RFC 4122 section 4.4, set the version to 4 and variant to RFC 4122
+      buf[6] = (buf[6] & 0x0f) | 0x40;
+      buf[8] = (buf[8] & 0x3f) | 0x80;
+
+      const byteToHex: string[] = [];
+      for (let i = 0; i < 256; ++i) {
+        byteToHex.push((i + 0x100).toString(16).substr(1));
+      }
+
+      const bth = byteToHex;
+      const uuid =
+        bth[buf[0]] + bth[buf[1]] + bth[buf[2]] + bth[buf[3]] + '-' +
+        bth[buf[4]] + bth[buf[5]] + '-' +
+        bth[buf[6]] + bth[buf[7]] + '-' +
+        bth[buf[8]] + bth[buf[9]] + '-' +
+        bth[buf[10]] + bth[buf[11]] + bth[buf[12]] + bth[buf[13]] + bth[buf[14]] + bth[buf[15]];
+
+      return uuid;
+    }
+
+    // Last-resort non-cryptographic, deterministic fallback if crypto is unavailable
+    if (!(this as any)._uuidFallbackCounter) {
+      (this as any)._uuidFallbackCounter = 0;
+    }
+    (this as any)._uuidFallbackCounter++;
+    return `note_${Date.now()}_${(this as any)._uuidFallbackCounter}`;
   }
 
   private ensureNoteId(note: Note): void {
