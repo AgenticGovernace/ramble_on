@@ -1,22 +1,27 @@
 {
   "name": "ramble_on",
+  "description": "Ramble On – capture and organize your thoughts",
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "ci": "npm run typecheck && npm run test && npm run build",
     "preview": "vite preview",
     "desktop:dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "desktop:build": "vite build --base=./ && electron-builder",
     "desktop:build:mac": "vite build --base=./ && electron-builder --mac",
-    "postinstall": "electron-builder install-app-deps",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "@google/genai": "^0.8.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.9.1",
     "chokidar": "^3.6.0",
     "marked": "^4.0.0"
@@ -25,9 +30,9 @@
     "@types/node": "^22.14.0",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "jsdom": "^26.0.0",
     "electron": "^35.1.2",
     "electron-builder": "^26.7.0",
+    "jsdom": "^26.0.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vitest": "^4.0.18",
@@ -52,7 +57,6 @@
         "dmg",
         "zip"
       ],
-      "icon": "build/icon.icns",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Ramble On uses the microphone to record your thoughts.",
         "NSCameraUsageDescription": "Ramble On can use the camera when needed."
@@ -73,12 +77,18 @@
       ]
     },
     "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
+      "target": "nsis"
     },
     "linux": {
-      "target": "AppImage",
-      "icon": "build/icon.png"
-    }
+      "target": "AppImage"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AgenticGovernace",
+        "repo": "ramble_on"
+      }
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
   }
 }

@@ -382,6 +382,40 @@ body {
   /* Push to the right, before tabs */
 }
 
+.provider-select-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 38px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.provider-select-label {
+  flex-shrink: 0;
+}
+
+.provider-select {
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-transform: none;
+  outline: none;
+  cursor: pointer;
+}
+
+.provider-select option {
+  color: #111;
+}
+
 .action-button-header {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
