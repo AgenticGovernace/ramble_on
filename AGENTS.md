@@ -1,42 +1,19 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `index.html` is the single-page entry point for the Vite app.
-- `src/main.tsx` contains the main TypeScript/DOM logic (single-file app).
-- `src/index.css` holds global styles.
-- `electron/main.cjs` is the Electron main process entry.
-- `kb/` is the on-disk Knowledge Base; edits are mirrored into SQLite.
-- SQLite data is stored under the Electron user data path (created at runtime).
-- `tests/` contains Vitest checks.
-- Root configs: `package.json`, `vite.config.ts`, `tsconfig.json`, and `metadata.json`.
+`src/` contains the renderer app: [`src/main.tsx`](src/main.tsx) is the main controller, [`src/index.css`](src/index.css) holds global styles, and [`src/types.d.ts`](src/types.d.ts) defines preload types. `electron/` contains the desktop shell: `main.cjs` for window, IPC, SQLite, and KB sync; `preload.cjs` for the renderer bridge; `mcp-server.cjs` for local tool APIs. `tests/` holds Vitest checks. `kb/` is the on-disk knowledge base included in desktop builds. `build/`, `dist/`, and `dist-electron/` are build artifacts or resources.
 
 ## Build, Test, and Development Commands
-- `npm install`: install dependencies.
-- `npm run dev`: start the Vite dev server for local development.
-- `npm run build`: create a production build in `dist/`.
-- `npm run preview`: serve the production build locally for verification.
-- `npm run desktop:dev`: run Electron against the Vite dev server.
-- `npm run desktop:build`: build and package the desktop app.
-- `npm run test`: run Vitest in CI mode.
-- `npm run test:watch`: run Vitest in watch mode.
+Use `npm install` once to install dependencies. `npm run dev` starts the Vite renderer on `127.0.0.1:5173`. `npm run desktop:dev` runs Vite and Electron together for full app testing. `npm run typecheck` runs `tsc --noEmit`. `npm run test` runs Vitest once; `npm run test:watch` keeps tests running locally. `npm run build` creates the web bundle in `dist/`. `npm run desktop:build` packages the Electron app, and `npm run ci` runs typecheck, tests, and build in sequence. `make help` lists the same workflows.
 
 ## Coding Style & Naming Conventions
-- Indentation: 2 spaces in TypeScript/TSX and CSS (match existing files).
-- Naming: `PascalCase` for classes/types, `camelCase` for variables/functions, and `kebab-case` for CSS classes.
-- Keep DOM selectors and IDs consistent with `index.html` to avoid runtime breakage.
-- No formatter/linter configured; if adding one, align with current 2‑space style.
+Match the existing 2-space indentation in TS, TSX, CSS, and CommonJS files. Use `PascalCase` for classes and types, `camelCase` for functions and variables, and keep DOM IDs and preload method names descriptive and stable. This codebase is not split into many small components, so prefer targeted helper functions over broad refactors unless the change requires it. No formatter or linter is configured; keep changes consistent with nearby code.
 
 ## Testing Guidelines
-- Framework: Vitest with `jsdom` for DOM-friendly tests.
-- Put new tests in `tests/` and prefer focused, fast checks (e.g., entry points, critical IDs).
-- For UI changes, do a manual smoke test:
-  - `npm run dev` and verify recording, note editing, and playback flows.
-  - `npm run build` to ensure TypeScript compiles and Vite bundles cleanly.
+Tests use Vitest with the `jsdom` environment. Add new specs under `tests/` using the `*.test.ts` pattern. Favor fast smoke tests around entry points, DOM contracts, IPC-facing behavior, and regression-prone flows. There is no enforced coverage gate, so validate meaningful paths manually when changing recording, AI provider, or Electron/KB behavior.
 
 ## Commit & Pull Request Guidelines
-- No commit history yet, so no established convention. Use concise, imperative subjects (e.g., "Add audio playback controls").
-- PRs should include: a short description, what was verified (commands run), and screenshots or screen recordings for UI changes.
+Recent history uses short imperative subjects such as `Update README.md` and `Create jekyll-gh-pages.yml`. Keep commits focused and similarly concise. Pull requests should include a brief summary, linked issue if applicable, commands run for verification, and screenshots or recordings for visible UI changes.
 
 ## Security & Configuration Tips
-- Store API keys in `.env.local` (see `README.md`), e.g. `GEMINI_API_KEY=...`.
-- Do not commit secrets or generated media; keep local data out of Git.
+Keep provider keys and local overrides in a local env file, not in commits. Review changes touching `env.local`, Electron IPC handlers, filesystem access, or the `kb/` tree carefully because they affect secrets, local data, and desktop trust boundaries.

@@ -1,10 +1,10 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session, systemPreferences } = require('electron');
 const path = require('path');
-const fs = require('fs');
 const fsp = require('fs/promises');
 const crypto = require('crypto');
 const chokidar = require('chokidar');
 const Database = require('better-sqlite3');
+const { startMcpServer, stopMcpServer } = require('./mcp-server.cjs');
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 
@@ -13,8 +13,89 @@ let statements = null;
 let mainWindow = null;
 let kbWatcher = null;
 
+/**
+ * Returns whether a permission request origin belongs to this application.
+ *
+ * @param {string} origin The requesting origin supplied by Electron.
+ * @returns {boolean} True when the origin is the packaged app or local dev URL.
+ */
+const isAllowedAppOrigin = (origin) => {
+  if (!origin) return true;
+  if (origin.startsWith('file://')) return true;
+
+  try {
+    const url = new URL(origin);
+    return url.hostname === '127.0.0.1' || url.hostname === 'localhost';
+  } catch (_error) {
+    return false;
+  }
+};
+
+/**
+ * Configures Chromium permission handling for microphone access in the app
+ * session and requests macOS microphone access when needed.
+ *
+ * @returns {Promise<void>} Resolves when permission handlers are installed.
+ */
+const configureMediaPermissions = async () => {
+  const defaultSession = session.defaultSession;
+
+  defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+    if (permission === 'media') {
+      return (
+        isAllowedAppOrigin(requestingOrigin) &&
+        (details.mediaType === 'audio' || details.mediaType === 'unknown')
+      );
+    }
+    return false;
+  });
+
+  defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    if (permission === 'media') {
+      callback(
+        isAllowedAppOrigin(details.requestingUrl) &&
+          (details.mediaType === 'audio' || details.mediaType === 'unknown'),
+      );
+      return;
+    }
+
+    callback(false);
+  });
+
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  const accessStatus = systemPreferences.getMediaAccessStatus('microphone');
+  if (accessStatus === 'not-determined') {
+    const granted = await systemPreferences.askForMediaAccess('microphone');
+    if (!granted) {
+      console.warn('Microphone access was denied by macOS.');
+    }
+    return;
+  }
+
+  if (accessStatus !== 'granted') {
+    console.warn(`Microphone access status is "${accessStatus}".`);
+  }
+};
+
+/**
+ * Converts a platform-specific path to a POSIX-style path for storage and IPC.
+ *
+ * @param {string} filePath The file-system path to normalize.
+ * @returns {string} The normalized path using forward slashes.
+ */
 const toPosixPath = (filePath) => filePath.split(path.sep).join('/');
 
+/**
+ * Resolves a Knowledge Base relative path against the configured KB root while
+ * preventing directory traversal and absolute-path escapes.
+ *
+ * @param {string} [relativePath=''] The requested Knowledge Base relative path.
+ * @returns {{kbRoot: string, relativePath: string, absolutePath: string}} The
+ * resolved root path, sanitized relative path, and absolute file-system path.
+ */
 const resolveKbPath = (relativePath = '') => {
   const kbRoot = getKbRoot();
   const normalized = path.posix.normalize(String(relativePath).replace(/\\/g, '/'));
@@ -36,6 +117,12 @@ const resolveKbPath = (relativePath = '') => {
   return { kbRoot, relativePath: normalized, absolutePath };
 };
 
+/**
+ * Validates and sanitizes a Knowledge Base entry name before file-system use.
+ *
+ * @param {string} name The requested folder or file name.
+ * @returns {string} The trimmed and validated entry name.
+ */
 const sanitizeEntryName = (name) => {
   const trimmed = String(name ?? '').trim();
   if (!trimmed) throw new Error('Name is required.');
@@ -44,6 +131,12 @@ const sanitizeEntryName = (name) => {
   return trimmed;
 };
 
+/**
+ * Opens the user database, creates the required tables, and prepares the
+ * parameterized statements used by the IPC handlers.
+ *
+ * @returns {void} No return value.
+ */
 const initDatabase = () => {
   const dbPath = path.join(app.getPath('userData'), 'ramble-on.sqlite');
   db = new Database(dbPath);
@@ -128,17 +221,34 @@ const initDatabase = () => {
   };
 };
 
+/**
+ * Determines the Knowledge Base root directory for the current runtime mode.
+ *
+ * @returns {string} The absolute directory path used for Knowledge Base files.
+ */
 const getKbRoot = () =>
   app.isPackaged
     ? path.join(app.getPath('userData'), 'kb')
     : path.join(app.getAppPath(), 'kb');
 
+/**
+ * Ensures the Knowledge Base root exists on disk before access.
+ *
+ * @returns {Promise<string>} The absolute Knowledge Base root path.
+ */
 const ensureKbRoot = async () => {
   const kbRoot = getKbRoot();
   await fsp.mkdir(kbRoot, { recursive: true });
   return kbRoot;
 };
 
+/**
+ * Recursively reads the on-disk Knowledge Base into the renderer tree shape.
+ *
+ * @param {string} dir The directory currently being traversed.
+ * @param {string} rootDir The root directory used to compute relative paths.
+ * @returns {Promise<Array<object>>} The serialized Knowledge Base subtree.
+ */
 const readKbTree = async (dir, rootDir) => {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
   const items = [];
@@ -169,9 +279,22 @@ const readKbTree = async (dir, rootDir) => {
   return items;
 };
 
+/**
+ * Creates a deterministic content hash for Knowledge Base file snapshots.
+ *
+ * @param {string} content The file content to hash.
+ * @returns {string} The SHA-256 hex digest of the content.
+ */
 const hashContent = (content) =>
   crypto.createHash('sha256').update(content).digest('hex');
 
+/**
+ * Mirrors a single Knowledge Base file from disk into SQLite.
+ *
+ * @param {string} filePath The absolute path to the file on disk.
+ * @param {string} kbRoot The absolute Knowledge Base root path.
+ * @returns {Promise<void>} No return value.
+ */
 const syncKbFileToDb = async (filePath, kbRoot) => {
   if (!db || !statements) return;
   const content = await fsp.readFile(filePath, 'utf8');
@@ -184,14 +307,24 @@ const syncKbFileToDb = async (filePath, kbRoot) => {
   });
 };
 
-const syncKbDirectoryToDb = async (kbRoot) => {
-  const entries = await fsp.readdir(kbRoot, { withFileTypes: true });
+/**
+ * Recursively syncs every Knowledge Base file beneath the supplied directory
+ * into SQLite, keeping relative paths anchored to the original KB root so
+ * file-system state remains queryable.
+ *
+ * @param {string} dir The directory currently being scanned.
+ * @param {string} [kbRoot=dir] The original KB root used to compute relative
+ * paths for SQLite records.
+ * @returns {Promise<void>} No return value.
+ */
+const syncKbDirectoryToDb = async (dir, kbRoot = dir) => {
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
   await Promise.all(
     entries.map(async (entry) => {
       if (entry.name.startsWith('.')) return;
-      const fullPath = path.join(kbRoot, entry.name);
+      const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        await syncKbDirectoryToDb(fullPath);
+        await syncKbDirectoryToDb(fullPath, kbRoot);
       } else if (entry.isFile()) {
         await syncKbFileToDb(fullPath, kbRoot);
       }
@@ -199,6 +332,12 @@ const syncKbDirectoryToDb = async (kbRoot) => {
   );
 };
 
+/**
+ * Recursively lists all files beneath a directory for delete and rename flows.
+ *
+ * @param {string} dir The directory to walk.
+ * @returns {Promise<string[]>} The absolute file paths discovered in the tree.
+ */
 const listKbFilesRecursive = async (dir) => {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
   const filePaths = [];
@@ -214,6 +353,12 @@ const listKbFilesRecursive = async (dir) => {
   return filePaths;
 };
 
+/**
+ * Starts the file watcher that keeps SQLite and the renderer synchronized with
+ * external Knowledge Base edits.
+ *
+ * @returns {Promise<void>} No return value.
+ */
 const startKbWatcher = async () => {
   const kbRoot = await ensureKbRoot();
   await syncKbDirectoryToDb(kbRoot);
@@ -228,7 +373,8 @@ const startKbWatcher = async () => {
 
   kbWatcher.on('add', async (filePath) => {
     try {
-      if (fs.statSync(filePath).isFile()) {
+      const stat = await fsp.stat(filePath);
+      if (stat.isFile()) {
         await syncKbFileToDb(filePath, kbRoot);
         mainWindow?.webContents.send('kb:updated');
       }
@@ -239,7 +385,8 @@ const startKbWatcher = async () => {
 
   kbWatcher.on('change', async (filePath) => {
     try {
-      if (fs.statSync(filePath).isFile()) {
+      const stat = await fsp.stat(filePath);
+      if (stat.isFile()) {
         await syncKbFileToDb(filePath, kbRoot);
         mainWindow?.webContents.send('kb:updated');
       }
@@ -255,6 +402,12 @@ const startKbWatcher = async () => {
   });
 };
 
+/**
+ * Creates the main Electron browser window and loads either the Vite dev
+ * server or the packaged renderer bundle.
+ *
+ * @returns {void} No return value.
+ */
 const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -272,12 +425,27 @@ const createWindow = () => {
   }
 };
 
+/**
+ * Registers all renderer-facing IPC handlers for note persistence and
+ * Knowledge Base CRUD operations.
+ *
+ * @returns {void} No return value.
+ */
+const requireRecordingId = (payload) => {
+  const id = payload?.recordingId;
+  if (typeof id !== 'string' || !id.trim()) {
+    throw new Error('recordingId is required and must be a non-empty string.');
+  }
+  return id;
+};
+
 const registerIpcHandlers = () => {
   ipcMain.handle('db:save-recording', (_event, payload) => {
     if (!db || !statements) return;
+    const recordingId = requireRecordingId(payload);
     const now = Date.now();
     statements.upsertRecording.run({
-      id: payload.recordingId,
+      id: recordingId,
       note_id: payload.noteId || null,
       append_mode: payload.appendMode ? 1 : 0,
       created_at: payload.createdAt || now,
@@ -287,8 +455,9 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('db:save-raw', (_event, payload) => {
     if (!db || !statements) return;
+    const recordingId = requireRecordingId(payload);
     statements.upsertRaw.run({
-      recording_id: payload.recordingId,
+      recording_id: recordingId,
       note_id: payload.noteId || null,
       content: payload.content || '',
       created_at: payload.createdAt || Date.now(),
@@ -297,8 +466,9 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('db:save-polished', (_event, payload) => {
     if (!db || !statements) return;
+    const recordingId = requireRecordingId(payload);
     statements.upsertPolished.run({
-      recording_id: payload.recordingId,
+      recording_id: recordingId,
       note_id: payload.noteId || null,
       content: payload.content || '',
       created_at: payload.createdAt || Date.now(),
@@ -404,9 +574,11 @@ const registerIpcHandlers = () => {
   });
 };
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await configureMediaPermissions();
   initDatabase();
   registerIpcHandlers();
+  await startMcpServer();
   createWindow();
   startKbWatcher();
 
@@ -424,6 +596,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  stopMcpServer().catch((error) => {
+    console.warn('Failed to stop MCP server:', error);
+  });
   if (kbWatcher) {
     kbWatcher.close().catch((error) => {
       console.warn('Failed to close KB watcher:', error);
