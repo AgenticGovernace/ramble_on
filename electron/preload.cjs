@@ -100,4 +100,12 @@ contextBridge.exposeInMainWorld('rambleOnDB', {
   onKnowledgeBaseUpdated: (callback) => {
     ipcRenderer.on('kb:updated', callback);
   },
+  /**
+   * Installs the bundled Ramble On skill into the Claude Desktop skills
+   * directory. Returns a discriminated Result — the renderer must check
+   * `r.ok` before reading `r.value` or `r.error`.
+   *
+   * @returns {Promise<{ok: true, value: {installedAt: string, files: string[]}} | {ok: false, error: {code: string, message: string}}>}
+   */
+  installSkill: () => ipcRenderer.invoke('skill:install'),
 });

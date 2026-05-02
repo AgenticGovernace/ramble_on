@@ -5,6 +5,63 @@ const crypto = require('crypto');
 const chokidar = require('chokidar');
 const Database = require('better-sqlite3');
 const { startMcpServer, stopMcpServer } = require('./mcp-server.cjs');
+const { ok, err, assertResult } = require('./lib/result.cjs');
+
+const SKILL_NAME = 'ramble-on';
+const SKILL_FILES = ['SKILL.md', 'references/platform-guides.md', 'references/voice-calibration.md'];
+
+/**
+ * Resolves the absolute path to the bundled skill source directory. In
+ * packaged builds this lives under `process.resourcesPath/ramble-on`; in
+ * development it lives under the repo root.
+ *
+ * @returns {string} Absolute path to the bundled skill directory.
+ */
+const resolveSkillSourceDir = () => {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, SKILL_NAME);
+  }
+  return path.join(__dirname, '..', SKILL_NAME);
+};
+
+/**
+ * Resolves the absolute path to the Claude Desktop skills directory in the
+ * user's per-OS application support location.
+ *
+ * @returns {string} Absolute path to `<appData>/Claude/skills/ramble-on`.
+ */
+const resolveSkillDestDir = () =>
+  path.join(app.getPath('appData'), 'Claude', 'skills', SKILL_NAME);
+
+/**
+ * Copies the bundled skill tree (SKILL.md + references/*.md) to the Claude
+ * Desktop skills directory. Walks only files in the SKILL_FILES allowlist —
+ * never follows symlinks, never accepts a path from the renderer.
+ *
+ * @returns {Promise<{installedAt: string, files: Array<string>}>}
+ */
+const copySkillTree = async () => {
+  const sourceDir = resolveSkillSourceDir();
+  const destDir = resolveSkillDestDir();
+  const writtenFiles = [];
+
+  try {
+    for (const relative of SKILL_FILES) {
+      const sourcePath = path.join(sourceDir, relative);
+      const destPath = path.join(destDir, relative);
+      const content = await fsp.readFile(sourcePath, 'utf8');
+      await fsp.mkdir(path.dirname(destPath), { recursive: true });
+      await fsp.writeFile(destPath, content, 'utf8');
+      writtenFiles.push(relative);
+    }
+    return { installedAt: destDir, files: writtenFiles };
+  } catch (error) {
+    for (const relative of writtenFiles) {
+      await fsp.unlink(path.join(destDir, relative)).catch(() => {});
+    }
+    throw error;
+  }
+};
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 
@@ -578,6 +635,20 @@ const registerIpcHandlers = () => {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
     AI_PROVIDER: process.env.AI_PROVIDER || '',
   }));
+
+  ipcMain.handle('skill:install', async () => {
+    try {
+      const result = await copySkillTree();
+      return assertResult(ok(result));
+    } catch (e) {
+      return assertResult(
+        err({
+          code: 'INSTALL_FAILED',
+          message: String(e?.message ?? e),
+        }),
+      );
+    }
+  });
 };
 
 app.whenReady().then(async () => {

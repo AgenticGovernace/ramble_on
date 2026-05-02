@@ -1,67 +1,74 @@
 /**
  * electron/mcp/server.cjs
  *
- * Ramble On — MCP server using the official @modelcontextprotocol/sdk.
- * Owns only the transport + protocol wiring. Tool implementations live in
- * `./tools/*` and external service access lives in `./clients/*`.
+ * Ramble On — local MCP HTTP server using the official `McpServer` API
+ * from `@modelcontextprotocol/sdk/server/mcp.js`. Each tool is registered
+ * via `server.registerTool(name, {title, description, inputSchema, annotations}, cb)`
+ * with a Zod input shape; per-request the SDK validates arguments before
+ * the handler runs and wraps handler exceptions as in-band tool errors
+ * (`isError: true`) per MCP spec.
  *
- * Transport: Streamable HTTP (stateless) on 127.0.0.1:${RAMBLE_MCP_PORT|3748}.
- * A fresh `Server` + `StreamableHTTPServerTransport` pair is created per
- * request because the SDK's stateless transport cannot be reused.
+ * Transport: Streamable HTTP (stateless), per-request server + transport
+ * pair, since the SDK's stateless transport cannot be reused.
  *
  * Endpoints:
- *   GET  /health  → readiness probe
- *   POST /mcp     → MCP requests (JSON-RPC over Streamable HTTP)
- *   POST /        → alias for /mcp (backwards compat)
+ *   GET  /health → readiness probe
+ *   POST /mcp    → MCP requests (JSON-RPC over Streamable HTTP)
+ *   POST /       → alias for /mcp (backwards compat)
  */
 
 'use strict';
 
 const http = require('http');
-const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const {
   StreamableHTTPServerTransport,
 } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-const {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} = require('@modelcontextprotocol/sdk/types.js');
 
 const { CONFIG } = require('./env.cjs');
-const { buildToolRegistry } = require('./tools/index.cjs');
+const { ALL_TOOLS } = require('./tools/index.cjs');
 
 const SERVER_INFO = { name: 'ramble-on', version: '1.0.0' };
 
-const TOOL_REGISTRY = buildToolRegistry();
-const TOOL_DESCRIPTORS = Object.values(TOOL_REGISTRY).map((tool) => ({
-  name: tool.name,
-  description: tool.description,
-  inputSchema: tool.inputSchema,
-}));
+/**
+ * Default response wrapper. Tools may override this by exporting
+ * `formatResponse(result)` — see `tools/get-skill.cjs` for an example
+ * that also emits `structuredContent`.
+ *
+ * @param {unknown} result Handler return value.
+ * @returns {{content: Array<{type: string, text: string}>}}
+ */
+const defaultFormatResponse = (result) => ({
+  content: [{ type: 'text', text: JSON.stringify(result) }],
+});
 
 /**
  * Creates a new MCP server instance with every Ramble On tool registered.
  *
- * @returns {import('@modelcontextprotocol/sdk/server/index.js').Server}
+ * @returns {import('@modelcontextprotocol/sdk/server/mcp.js').McpServer}
  */
 const createMcpServer = () => {
-  const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
+  const server = new McpServer(SERVER_INFO, { capabilities: { tools: {} } });
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DESCRIPTORS,
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    const tool = TOOL_REGISTRY[name];
-    if (!tool) {
-      throw new Error(`Tool not found: ${name}`);
-    }
-    const result = await tool.handler(args || {});
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result) }],
+  for (const tool of ALL_TOOLS) {
+    const wrappedHandler = async (params) => {
+      const result = await tool.handler(params || {});
+      return tool.formatResponse
+        ? tool.formatResponse(result)
+        : defaultFormatResponse(result);
     };
-  });
+
+    server.registerTool(
+      tool.name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputSchemaZod,
+        annotations: tool.annotations,
+      },
+      wrappedHandler,
+    );
+  }
 
   return server;
 };
@@ -90,9 +97,9 @@ const applyCors = (req, res) => {
 };
 
 /**
- * Handles a single MCP request with a freshly-constructed server + transport.
- * The SDK's stateless Streamable HTTP transport cannot be reused across
- * requests, so we build a per-request pair and dispose of it when done.
+ * Handles a single MCP request with a freshly-constructed server +
+ * transport (the SDK's stateless Streamable HTTP transport cannot be
+ * reused across requests).
  *
  * @param {import('http').IncomingMessage} req
  * @param {import('http').ServerResponse} res
@@ -117,9 +124,10 @@ const handleMcpRequest = async (req, res) => {
 };
 
 /**
- * Starts the local MCP HTTP server used by desktop clients and tool routing.
+ * Starts the local MCP HTTP server used by desktop clients and tool
+ * routing.
  *
- * @returns {Promise<import('http').Server>} The running HTTP server instance.
+ * @returns {Promise<import('http').Server>} The running HTTP server.
  */
 const startMcpServer = async () => {
   if (httpServer) return httpServer;
@@ -179,7 +187,7 @@ const startMcpServer = async () => {
     httpServer.once('error', onError);
     httpServer.listen(CONFIG.port, '127.0.0.1', () => {
       httpServer.removeListener('error', onError);
-      const toolNames = Object.keys(TOOL_REGISTRY).join(', ');
+      const toolNames = ALL_TOOLS.map((t) => t.name).join(', ');
       console.log(
         `[ramble-on MCP] Server running at http://127.0.0.1:${CONFIG.port}`,
       );

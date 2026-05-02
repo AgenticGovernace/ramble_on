@@ -1,3 +1,5 @@
+import type { Result } from './lib/result';
+
 export {};
 
 declare global {
@@ -62,6 +64,12 @@ declare global {
         ANTHROPIC_API_KEY: string;
         AI_PROVIDER: string;
       }>;
+      installSkill: () => Promise<
+        Result<
+          { installedAt: string; files: string[] },
+          { code: string; message: string }
+        >
+      >;
     };
   }
 }
