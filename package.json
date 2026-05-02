@@ -35,7 +35,7 @@
     "@types/node": "^22.14.0",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^35.1.2",
+    "electron": "^41.1.1",
     "electron-builder": "^26.7.0",
     "jsdom": "^26.0.0",
     "typescript": "~5.8.2",
