@@ -7,7 +7,294 @@
 import {GoogleGenAI, Type} from '@google/genai';
 import {marked} from 'marked';
 
-const MODEL_NAME = 'gemini-3-pro-preview';
+type AiProvider = 'gemini' | 'openai' | 'anthropic';
+
+interface TextGenerationOptions {
+  provider: AiProvider;
+  prompt: string;
+  geminiConfig?: {
+    responseMimeType?: string;
+    responseSchema?: object;
+  };
+}
+
+const PROVIDER_STORAGE_KEY = 'ramble-on-ai-provider';
+const DEFAULT_PROVIDER = normalizeProvider(process.env.AI_PROVIDER);
+const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-pro';
+const GEMINI_TRANSCRIPTION_MODEL =
+  process.env.GEMINI_TRANSCRIPTION_MODEL || GEMINI_TEXT_MODEL;
+const GEMINI_VIDEO_MODEL =
+  process.env.GEMINI_VIDEO_MODEL || 'veo-2.0-generate-001';
+const OPENAI_TEXT_MODEL = process.env.OPENAI_TEXT_MODEL || 'gpt-4.1-mini';
+const OPENAI_TRANSCRIPTION_MODEL =
+  process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe';
+const ANTHROPIC_TEXT_MODEL =
+  process.env.ANTHROPIC_TEXT_MODEL || 'claude-3-5-sonnet-latest';
+
+/**
+ * Normalizes a provider identifier into one of the supported AI backends.
+ *
+ * @param {string | undefined} provider The provider string to normalize.
+ * @returns {AiProvider} The normalized provider identifier.
+ */
+function normalizeProvider(provider: string | undefined): AiProvider {
+  if (provider === 'openai' || provider === 'anthropic') {
+    return provider;
+  }
+  return 'gemini';
+}
+
+/**
+ * Reads the configured API key for the requested AI provider.
+ *
+ * @param {AiProvider} provider The provider whose API key is needed.
+ * @returns {string} The configured API key or an empty string when missing.
+ */
+function getApiKey(provider: AiProvider): string {
+  if (provider === 'openai') {
+    return process.env.OPENAI_API_KEY || '';
+  }
+  if (provider === 'anthropic') {
+    return process.env.ANTHROPIC_API_KEY || '';
+  }
+  return process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+}
+
+/**
+ * Normalizes a browser-provided audio MIME type to its base media type.
+ *
+ * @param {string} mimeType The raw MIME type reported by MediaRecorder.
+ * @returns {string} The MIME type without codec parameters.
+ */
+function getBaseMimeType(mimeType: string): string {
+  return mimeType.split(';', 1)[0].trim().toLowerCase();
+}
+
+/**
+ * Maps a supported audio MIME type to a stable file extension for uploads.
+ *
+ * @param {string} mimeType The raw MIME type reported by MediaRecorder.
+ * @returns {string} The file extension expected by transcription endpoints.
+ */
+function getAudioFileExtension(mimeType: string): string {
+  const baseMimeType = getBaseMimeType(mimeType);
+
+  switch (baseMimeType) {
+    case 'audio/webm':
+      return 'webm';
+    case 'audio/mp4':
+    case 'audio/m4a':
+      return 'm4a';
+    case 'audio/mpeg':
+      return 'mp3';
+    case 'audio/wav':
+    case 'audio/x-wav':
+      return 'wav';
+    case 'audio/ogg':
+      return 'ogg';
+    default:
+      return 'webm';
+  }
+}
+
+/**
+ * Ensures the requested AI provider is configured before making an API call.
+ *
+ * @param {AiProvider} provider The provider being used.
+ * @returns {string} The validated API key.
+ */
+function requireApiKey(provider: AiProvider): string {
+  const apiKey = getApiKey(provider);
+  if (!apiKey) {
+    throw new Error(`Missing API key for provider "${provider}".`);
+  }
+  return apiKey;
+}
+
+/**
+ * Resolves the provider to use for speech transcription, falling back away
+ * from text-only providers when required.
+ *
+ * @param {AiProvider} provider The currently selected application provider.
+ * @returns {AiProvider} A provider that can handle speech transcription.
+ */
+function resolveSpeechProvider(provider: AiProvider): AiProvider {
+  if (provider === 'gemini' || provider === 'openai') {
+    return provider;
+  }
+  if (getApiKey('openai')) {
+    return 'openai';
+  }
+  return 'gemini';
+}
+
+/**
+ * Extracts a plain text payload from an OpenAI Responses API result.
+ *
+ * @param {any} data The raw JSON payload returned by the Responses API.
+ * @returns {string} The flattened textual response.
+ */
+function extractOpenAIText(data: any): string {
+  if (typeof data?.output_text === 'string' && data.output_text.trim()) {
+    return data.output_text;
+  }
+
+  const outputItems = Array.isArray(data?.output) ? data.output : [];
+  const text = outputItems
+    .flatMap((item: any) => (Array.isArray(item?.content) ? item.content : []))
+    .filter((content: any) => content?.type === 'output_text' || content?.type === 'text')
+    .map((content: any) => content?.text || '')
+    .join('');
+
+  if (text.trim()) {
+    return text;
+  }
+
+  throw new Error('OpenAI returned an empty response.');
+}
+
+/**
+ * Generates text with the selected provider using a unified prompt interface.
+ *
+ * @param {TextGenerationOptions} options The provider, prompt, and optional
+ * provider-specific generation settings.
+ * @returns {Promise<string>} The generated text response.
+ */
+async function generateTextWithProvider(
+  options: TextGenerationOptions,
+): Promise<string> {
+  const {provider, prompt, geminiConfig} = options;
+
+  if (provider === 'gemini') {
+    const ai = new GoogleGenAI({apiKey: requireApiKey('gemini')});
+    const response = await ai.models.generateContent({
+      model: GEMINI_TEXT_MODEL,
+      contents: [{text: prompt}],
+      config: geminiConfig,
+    });
+    return response.text ?? '';
+  }
+
+  if (provider === 'openai') {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${requireApiKey('openai')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: OPENAI_TEXT_MODEL,
+        input: prompt,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI request failed: ${response.status} ${response.statusText}`);
+    }
+
+    return extractOpenAIText(await response.json());
+  }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': requireApiKey('anthropic'),
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_TEXT_MODEL,
+      max_tokens: 4096,
+      messages: [{role: 'user', content: prompt}],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Anthropic request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const text = (Array.isArray(data?.content) ? data.content : [])
+    .filter((item: any) => item?.type === 'text')
+    .map((item: any) => item?.text || '')
+    .join('');
+
+  if (!text.trim()) {
+    throw new Error('Anthropic returned an empty response.');
+  }
+
+  return text;
+}
+
+/**
+ * Transcribes recorded audio with the selected speech-capable provider.
+ *
+ * @param {{provider: AiProvider, audioBlob: Blob, base64Audio: string, mimeType: string}} options
+ * The transcription provider and audio payload metadata.
+ * @returns {Promise<string>} The transcribed text.
+ */
+async function transcribeAudioWithProvider(options: {
+  provider: AiProvider;
+  audioBlob: Blob;
+  base64Audio: string;
+  mimeType: string;
+}): Promise<string> {
+  const provider = resolveSpeechProvider(options.provider);
+
+  if (provider === 'gemini') {
+    const ai = new GoogleGenAI({apiKey: requireApiKey('gemini')});
+    const response = await ai.models.generateContent({
+      model: GEMINI_TRANSCRIPTION_MODEL,
+      contents: [
+        {text: 'Generate a complete, detailed transcript of this audio.'},
+        {
+          inlineData: {
+            mimeType: options.mimeType,
+            data: options.base64Audio,
+          },
+        },
+      ],
+    });
+    return response.text ?? '';
+  }
+
+  const uploadMimeType = getBaseMimeType(options.mimeType) || 'audio/webm';
+  const uploadBlob =
+    options.audioBlob.type === uploadMimeType
+      ? options.audioBlob
+      : new Blob([options.audioBlob], {type: uploadMimeType});
+  const formData = new FormData();
+  formData.append(
+    'file',
+    uploadBlob,
+    `recording.${getAudioFileExtension(uploadMimeType)}`,
+  );
+  formData.append('model', OPENAI_TRANSCRIPTION_MODEL);
+
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${requireApiKey('openai')}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = (await response.text()).trim();
+    throw new Error(
+      `OpenAI transcription failed: ${response.status} ${response.statusText}${
+        errorText ? ` - ${errorText}` : ''
+      }`,
+    );
+  }
+
+  const data = await response.json();
+  return typeof data?.text === 'string' ? data.text : '';
+}
+
+/**
+ * Represents a persisted note in the renderer's local in-memory store.
+ */
 interface Note {
   id: string;
   title: string;
@@ -16,6 +303,10 @@ interface Note {
   timestamp: number;
 }
 
+/**
+ * Describes a file-system-backed Knowledge Base node rendered in the sidebar
+ * tree and manager modal.
+ */
 interface KnowledgeBaseItem {
   type: 'folder' | 'file';
   name: string;
@@ -25,7 +316,10 @@ interface KnowledgeBaseItem {
   path?: string;
 }
 
-
+/**
+ * Coordinates the entire renderer-side experience, including note editing,
+ * recording, AI formatting, playback, theming, and Knowledge Base management.
+ */
 class VoiceNotesApp {
   private mediaRecorder: MediaRecorder | null = null;
   private recordButton: HTMLButtonElement;
@@ -38,6 +332,7 @@ class VoiceNotesApp {
   private loadNotesButton: HTMLButtonElement;
   private themeToggleButton: HTMLButtonElement;
   private themeToggleIcon: HTMLElement;
+  private providerSelect: HTMLSelectElement;
   private audioChunks: Blob[] = [];
   private isRecording = false;
 
@@ -174,7 +469,12 @@ class VoiceNotesApp {
     ]},
   ];
 
-
+  /**
+   * Creates the renderer controller, captures the static DOM references, and
+   * wires the application startup sequence.
+   *
+   * @returns A fully initialized voice-notes application instance.
+   */
   constructor() {
     this.recordButton = document.getElementById(
       'recordButton',
@@ -195,6 +495,9 @@ class VoiceNotesApp {
     this.themeToggleButton = document.getElementById(
       'themeToggleButton',
     ) as HTMLButtonElement;
+    this.providerSelect = document.getElementById(
+      'providerSelect',
+    ) as HTMLSelectElement;
     this.themeToggleIcon = this.themeToggleButton.querySelector(
       'i',
     ) as HTMLElement;
@@ -299,6 +602,7 @@ class VoiceNotesApp {
     this.bindEventListeners();
     this.initTheme();
     this.initAppendMode();
+    this.initProviderSelection();
     this.initResizer();
     this.buildKnowledgeBasePath(this.knowledgeBaseData);
     this.renderKnowledgeBase();
@@ -313,13 +617,25 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Returns the currently selected note when the active index points at a
+   * valid note in the in-memory collection.
+   *
+   * @returns The active note, or `null` when no note is selected.
+   */
   private get currentNote(): Note | null {
     if (this.activeNoteIndex < 0 || this.activeNoteIndex >= this.notes.length) {
       return null;
     }
     return this.notes[this.activeNoteIndex];
   }
-  
+
+  /**
+   * Attaches DOM event listeners for note actions, playback controls, modal
+   * flows, and Knowledge Base operations.
+   *
+   * @returns {void} No return value.
+   */
   private bindEventListeners(): void {
     this.recordButton.addEventListener('click', () => this.toggleRecording());
     this.newButton.addEventListener('click', () => this.createNewNote());
@@ -328,6 +644,7 @@ class VoiceNotesApp {
     this.loadNotesButton.addEventListener('click', () => this.loadNotesFromStorage());
     this.editorTitle.addEventListener('blur', () => this.saveCurrentNoteTitle());
     this.themeToggleButton.addEventListener('click', () => this.toggleTheme());
+    this.providerSelect.addEventListener('change', () => this.handleProviderChange());
     this.appendModeToggle.addEventListener('change', () => this.toggleAppendMode());
     window.addEventListener('resize', this.handleResize.bind(this));
 
@@ -396,6 +713,12 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Attaches tab navigation handlers and keeps the active tab indicator aligned
+   * when the viewport changes.
+   *
+   * @returns {void} No return value.
+   */
   private bindTabEventListeners(): void {
     this.tabButtons.forEach(button => {
         button.addEventListener('click', () => {
@@ -413,6 +736,15 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Marks a note tab as active, reveals the matching content panel, and
+   * repositions the animated tab indicator.
+   *
+   * @param {HTMLButtonElement | null} activeButton The tab button to activate.
+   * @param {boolean} [skipAnimation=false] Whether to reposition the indicator
+   * without transition effects.
+   * @returns {void} No return value.
+   */
   private setActiveTab(activeButton: HTMLButtonElement | null, skipAnimation = false): void {
       if (!activeButton || !this.activeTabIndicator) return;
 
@@ -443,13 +775,76 @@ class VoiceNotesApp {
         this.activeTabIndicator.style.transition = originalTransition;
       }
   }
-  
+
+  /**
+   * Restores append-mode state from local storage and synchronizes the toggle
+   * control with that persisted preference.
+   *
+   * @returns {void} No return value.
+   */
   private initAppendMode(): void {
     const savedAppendMode = localStorage.getItem('appendMode');
     this.isAppendMode = savedAppendMode === 'true';
     this.appendModeToggle.checked = this.isAppendMode;
   }
 
+  /**
+   * Restores the selected AI provider from local storage and updates the UI to
+   * reflect any provider-specific capability constraints.
+   *
+   * @returns {void} No return value.
+   */
+  private initProviderSelection(): void {
+    const storedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
+    this.providerSelect.value = normalizeProvider(storedProvider ?? DEFAULT_PROVIDER);
+    this.updateProviderSelectionUI();
+  }
+
+  /**
+   * Returns the currently selected AI provider from the provider selector.
+   *
+   * @returns {AiProvider} The active provider identifier.
+   */
+  private getSelectedProvider(): AiProvider {
+    return normalizeProvider(this.providerSelect.value);
+  }
+
+  /**
+   * Persists a provider selection change and refreshes any provider-specific
+   * UI affordances.
+   *
+   * @returns {void} No return value.
+   */
+  private handleProviderChange(): void {
+    const provider = this.getSelectedProvider();
+    localStorage.setItem(PROVIDER_STORAGE_KEY, provider);
+    this.updateProviderSelectionUI();
+    this.recordingStatus.textContent = `Using ${provider} for supported AI tasks.`;
+  }
+
+  /**
+   * Updates control states and tooltips based on the active AI provider.
+   *
+   * @returns {void} No return value.
+   */
+  private updateProviderSelectionUI(): void {
+    const provider = this.getSelectedProvider();
+
+    if (provider === 'gemini') {
+      this.generateVideoButton.disabled = false;
+      this.generateVideoButton.title = 'Generate Video from Note';
+      return;
+    }
+
+    this.generateVideoButton.disabled = true;
+    this.generateVideoButton.title = 'Video generation currently requires Gemini.';
+  }
+
+  /**
+   * Enables drag-resizing for the Knowledge Base sidebar.
+   *
+   * @returns {void} No return value.
+   */
   private initResizer(): void {
     const sidebar = this.knowledgeBaseSidebar;
     const resizer = this.resizer;
@@ -483,6 +878,14 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Rebuilds the derived Knowledge Base path metadata for each tree node.
+   *
+   * @param {KnowledgeBaseItem[]} items The tree nodes to annotate.
+   * @param {string} [parentPath=''] The parent path prefix for the current
+   * traversal level.
+   * @returns {void} No return value.
+   */
   private buildKnowledgeBasePath(items: KnowledgeBaseItem[], parentPath = ''): void {
       items.forEach(item => {
           const currentPath = parentPath ? `${parentPath}/${item.name}` : item.name;
@@ -498,6 +901,11 @@ class VoiceNotesApp {
       });
   }
 
+  /**
+   * Re-renders the sidebar Knowledge Base tree from the in-memory model.
+   *
+   * @returns {void} No return value.
+   */
   private renderKnowledgeBase(): void {
     this.folderTreeContainer.innerHTML = '';
     const treeRoot = this.createTreeElement(this.knowledgeBaseData);
@@ -505,6 +913,11 @@ class VoiceNotesApp {
     this.folderTreeContainer.appendChild(treeRoot);
   }
 
+  /**
+   * Re-renders the modal-based Knowledge Base management tree.
+   *
+   * @returns {void} No return value.
+   */
   private renderKbManagerTree(): void {
     this.kbManagerTree.innerHTML = '';
     const treeRoot = this.createKbManagerTreeElement(this.knowledgeBaseData);
@@ -512,6 +925,12 @@ class VoiceNotesApp {
     this.kbManagerTree.appendChild(treeRoot);
   }
 
+  /**
+   * Builds the nested sidebar DOM tree for Knowledge Base navigation.
+   *
+   * @param {KnowledgeBaseItem[]} items The Knowledge Base nodes to render.
+   * @returns {HTMLUListElement} The root list element for the subtree.
+   */
   private createTreeElement(items: KnowledgeBaseItem[]): HTMLUListElement {
       const ul = document.createElement('ul');
       items.forEach(item => {
@@ -566,6 +985,12 @@ class VoiceNotesApp {
       return ul;
   }
 
+  /**
+   * Builds the selectable Knowledge Base tree used by the manager modal.
+   *
+   * @param {KnowledgeBaseItem[]} items The Knowledge Base nodes to render.
+   * @returns {HTMLUListElement} The root list element for the subtree.
+   */
   private createKbManagerTreeElement(items: KnowledgeBaseItem[]): HTMLUListElement {
     const ul = document.createElement('ul');
     items.forEach(item => {
@@ -623,11 +1048,24 @@ class VoiceNotesApp {
     return ul;
   }
 
+  /**
+   * Expands or collapses a folder node in the sidebar tree.
+   *
+   * @param {KnowledgeBaseItem} folderItem The folder entry to toggle.
+   * @returns {void} No return value.
+   */
   private toggleFolder(folderItem: KnowledgeBaseItem): void {
       folderItem.isOpen = !folderItem.isOpen;
       this.renderKnowledgeBase();
   }
 
+  /**
+   * Opens a Knowledge Base file in the dedicated content tab and renders it as
+   * markdown or plain text based on file extension.
+   *
+   * @param {KnowledgeBaseItem} fileItem The file node to display.
+   * @returns {Promise<void>} Resolves after the content view has been updated.
+   */
   private async openKnowledgeBaseFile(fileItem: KnowledgeBaseItem): Promise<void> {
     this.currentKbFile = fileItem;
     this.knowledgeBaseTab.textContent = fileItem.name;
@@ -654,6 +1092,11 @@ class VoiceNotesApp {
     this.setActiveTab(this.knowledgeBaseTab);
   }
 
+  /**
+   * Switches the active Knowledge Base file view into editable mode.
+   *
+   * @returns {void} No return value.
+   */
   private enableKbEditing(): void {
     if (!this.currentKbFile) return;
 
@@ -664,6 +1107,12 @@ class VoiceNotesApp {
     this.kbContentEditor.focus();
   }
 
+  /**
+   * Persists the currently open Knowledge Base file through the Electron
+   * preload bridge and refreshes the visible content preview.
+   *
+   * @returns {Promise<void>} Resolves after the save workflow completes.
+   */
   private async saveKnowledgeBaseFile(): Promise<void> {
     if (!this.currentKbFile || !this.currentKbFile.path) {
       alert('No Knowledge Base file is currently open.');
@@ -713,6 +1162,14 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Serializes the Knowledge Base tree into a readable text snapshot for AI
+   * prompts and contextual formatting flows.
+   *
+   * @param {KnowledgeBaseItem[]} items The nodes to serialize.
+   * @param {number} [depth=0] The current indentation depth.
+   * @returns {string} The flattened Knowledge Base representation.
+   */
   private serializeKnowledgeBase(items: KnowledgeBaseItem[], depth = 0): string {
     let result = '';
     const indent = '  '.repeat(depth);
@@ -734,16 +1191,30 @@ class VoiceNotesApp {
     return result;
   }
 
+  /**
+   * Generates a best-effort unique note identifier using secure browser crypto
+   * when available and deterministic fallbacks otherwise.
+   *
+   * @returns {string} A UUID-like identifier for note persistence.
+   */
   private generateUuid(): string {
     // Prefer native cryptographically secure UUID when available
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-      return crypto.randomUUID();
+    const browserCrypto = globalThis.crypto as
+      | {
+          randomUUID?: () => string;
+          getRandomValues?: (values: Uint8Array) => Uint8Array;
+        }
+      | undefined;
+
+    if (browserCrypto && typeof browserCrypto.randomUUID === 'function') {
+      return browserCrypto.randomUUID();
     }
 
     // Fallback: generate a UUID-like value using crypto.getRandomValues
-    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    if (browserCrypto && typeof browserCrypto.getRandomValues === 'function') {
       const buf = new Uint8Array(16);
-      crypto.getRandomValues(buf);
+      const getRandomValues = browserCrypto.getRandomValues!;
+      getRandomValues(buf);
 
       // Per RFC 4122 section 4.4, set the version to 4 and variant to RFC 4122
       buf[6] = (buf[6] & 0x0f) | 0x40;
@@ -773,12 +1244,25 @@ class VoiceNotesApp {
     return `note_${Date.now()}_${(this as any)._uuidFallbackCounter}`;
   }
 
+  /**
+   * Ensures a note has a durable identifier before it is persisted or used as
+   * an append target.
+   *
+   * @param {Note} note The note whose identifier should be validated.
+   * @returns {void} No return value.
+   */
   private ensureNoteId(note: Note): void {
     if (!note.id || note.id.startsWith('note_')) {
       note.id = this.generateUuid();
     }
   }
 
+  /**
+   * Prepares the recording session identifier and note linkage before a new
+   * microphone capture starts.
+   *
+   * @returns {void} No return value.
+   */
   private prepareRecordingSession(): void {
     const currentNote = this.currentNote;
     if (currentNote) {
@@ -796,6 +1280,11 @@ class VoiceNotesApp {
     void this.persistRecordingSession();
   }
 
+  /**
+   * Persists recording-session metadata for the current capture workflow.
+   *
+   * @returns {Promise<void>} Resolves when the main-process write completes.
+   */
   private async persistRecordingSession(): Promise<void> {
     if (!window.rambleOnDB || !this.recordingSessionId) return;
     await window.rambleOnDB.saveRecording({
@@ -806,6 +1295,12 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Persists raw transcription content for the active recording session.
+   *
+   * @param {string} content The raw transcription text to store.
+   * @returns {Promise<void>} Resolves when the persistence call completes.
+   */
   private async persistRawEntry(content: string): Promise<void> {
     if (!window.rambleOnDB || !this.recordingSessionId) return;
     await window.rambleOnDB.saveRawEntry({
@@ -816,6 +1311,12 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Persists polished note content for the active recording session.
+   *
+   * @param {string} content The polished note body to store.
+   * @returns {Promise<void>} Resolves when the persistence call completes.
+   */
   private async persistPolishedEntry(content: string): Promise<void> {
     if (!window.rambleOnDB || !this.recordingSessionId) return;
     await window.rambleOnDB.savePolishedEntry({
@@ -826,6 +1327,13 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Loads the on-disk Knowledge Base tree through the preload bridge and
+   * refreshes any open file or manager state to match disk.
+   *
+   * @returns {Promise<void>} Resolves after the in-memory tree has been
+   * synchronized.
+   */
   private async loadKnowledgeBaseFromDisk(): Promise<void> {
     if (!window.rambleOnDB?.getKnowledgeBase) return;
     try {
@@ -857,6 +1365,11 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Subscribes to main-process Knowledge Base change notifications.
+   *
+   * @returns {void} No return value.
+   */
   private registerKnowledgeBaseWatcher(): void {
     if (!window.rambleOnDB?.onKnowledgeBaseUpdated) return;
     window.rambleOnDB.onKnowledgeBaseUpdated(() => {
@@ -864,6 +1377,11 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Closes the dedicated Knowledge Base file tab and resets its view state.
+   *
+   * @returns {void} No return value.
+   */
   private closeKbFileTab(): void {
     this.currentKbFile = null;
     this.knowledgeBaseTab.style.display = 'none';
@@ -879,6 +1397,14 @@ class VoiceNotesApp {
     this.saveKbButton.style.display = 'none';
   }
 
+  /**
+   * Searches the Knowledge Base tree for a node with a matching relative path.
+   *
+   * @param {KnowledgeBaseItem[]} items The subtree to search.
+   * @param {string} targetPath The relative path to locate.
+   * @returns {KnowledgeBaseItem | null} The matching node, or `null` when not
+   * found.
+   */
   private findKbItemByPath(items: KnowledgeBaseItem[], targetPath: string): KnowledgeBaseItem | null {
     for (const item of items) {
       if (item.path === targetPath) return item;
@@ -890,6 +1416,12 @@ class VoiceNotesApp {
     return null;
   }
 
+  /**
+   * Opens the Knowledge Base manager modal after refreshing the latest tree
+   * data from disk.
+   *
+   * @returns {Promise<void>} Resolves after the modal is ready for interaction.
+   */
   private async showKbManager(): Promise<void> {
     if (!window.rambleOnDB?.getKnowledgeBase) {
       alert('Knowledge Base management is only available in desktop mode.');
@@ -905,11 +1437,21 @@ class VoiceNotesApp {
     this.renderKbManagerTree();
   }
 
+  /**
+   * Hides the Knowledge Base manager modal and clears any inline form state.
+   *
+   * @returns {void} No return value.
+   */
   private hideKbManager(): void {
     this.kbManagerModal.classList.add('hidden');
     this.closeKbManagerForm();
   }
 
+  /**
+   * Updates the manager modal controls to reflect the current tree selection.
+   *
+   * @returns {void} No return value.
+   */
   private updateKbManagerSelectionUI(): void {
     const displayPath = this.kbManagerSelectedItem?.path ? `/${this.kbManagerSelectedItem.path}` : '/';
     this.kbManagerSelectedPath.textContent = displayPath;
@@ -920,6 +1462,13 @@ class VoiceNotesApp {
     this.kbManagerOpen.disabled = !isFile;
   }
 
+  /**
+   * Computes the parent path used for Knowledge Base create operations based
+   * on the current manager selection.
+   *
+   * @returns {string} The relative parent path, or an empty string for the
+   * Knowledge Base root.
+   */
   private getKbManagerParentPath(): string {
     const selected = this.kbManagerSelectedItem;
     if (!selected?.path) return '';
@@ -929,6 +1478,14 @@ class VoiceNotesApp {
     return parts.join('/');
   }
 
+  /**
+   * Configures and reveals the manager modal form for create, rename, or
+   * delete workflows.
+   *
+   * @param {'new-folder' | 'new-file' | 'rename' | 'delete'} mode The form
+   * mode to open.
+   * @returns {void} No return value.
+   */
   private openKbManagerForm(mode: 'new-folder' | 'new-file' | 'rename' | 'delete'): void {
     if (!window.rambleOnDB) {
       alert('Knowledge Base management is only available in desktop mode.');
@@ -979,6 +1536,11 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Resets and hides the inline Knowledge Base manager form.
+   *
+   * @returns {void} No return value.
+   */
   private closeKbManagerForm(): void {
     this.kbManagerFormMode = null;
     this.kbManagerForm.classList.add('hidden');
@@ -989,6 +1551,13 @@ class VoiceNotesApp {
     this.kbManagerFormName.readOnly = false;
   }
 
+  /**
+   * Executes the currently configured Knowledge Base manager form action and
+   * refreshes the modal tree afterward.
+   *
+   * @returns {Promise<void>} Resolves after the selected file-system operation
+   * has completed.
+   */
   private async submitKbManagerForm(): Promise<void> {
     if (!window.rambleOnDB) return;
     const mode = this.kbManagerFormMode;
@@ -1052,6 +1621,11 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Opens the currently selected Knowledge Base file from the manager modal.
+   *
+   * @returns {void} No return value.
+   */
   private openKbManagerSelection(): void {
     const selected = this.kbManagerSelectedItem;
     if (!selected || selected.type !== 'file') return;
@@ -1059,6 +1633,12 @@ class VoiceNotesApp {
     this.hideKbManager();
   }
 
+  /**
+   * Persists append-mode changes and updates the active recording session
+   * identifier strategy.
+   *
+   * @returns {void} No return value.
+   */
   private toggleAppendMode(): void {
     this.isAppendMode = this.appendModeToggle.checked;
     localStorage.setItem('appendMode', String(this.isAppendMode));
@@ -1066,6 +1646,12 @@ class VoiceNotesApp {
     void this.persistRecordingSession();
   }
 
+  /**
+   * Responds to viewport changes by resizing live visualizers and realigning
+   * the active note tab indicator.
+   *
+   * @returns {void} No return value.
+   */
   private handleResize(): void {
     if (this.isRecording) {
       requestAnimationFrame(() => {
@@ -1083,6 +1669,13 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Resizes a visualization canvas for the current device pixel ratio while
+   * preserving CSS layout dimensions.
+   *
+   * @param {HTMLCanvasElement} canvas The canvas to resize.
+   * @returns {void} No return value.
+   */
   private setupCanvasDimensions(canvas: HTMLCanvasElement): void {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -1099,6 +1692,11 @@ class VoiceNotesApp {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+  /**
+   * Restores the saved visual theme and synchronizes the toggle icon state.
+   *
+   * @returns {void} No return value.
+   */
   private initTheme(): void {
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'light') {
@@ -1112,6 +1710,11 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Toggles between dark and light theme variants and persists the selection.
+   *
+   * @returns {void} No return value.
+   */
   private toggleTheme(): void {
     document.body.classList.toggle('light-mode');
     if (document.body.classList.contains('light-mode')) {
@@ -1125,6 +1728,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Starts or stops the primary voice-note recording workflow.
+   *
+   * @returns {Promise<void>} Resolves after the requested state transition
+   * completes.
+   */
   private async toggleRecording(): Promise<void> {
     if (!this.isRecording) {
       await this.startRecording();
@@ -1133,6 +1742,13 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Starts or stops the ATP-specific recording workflow used to collect extra
+   * formatting instructions.
+   *
+   * @returns {Promise<void>} Resolves after the recording state change
+   * completes.
+   */
   private async toggleATPRecording(): Promise<void> {
     const noteText = this.polishedNote.innerText;
     if (!noteText || this.polishedNote.classList.contains('placeholder-active')) {
@@ -1158,6 +1774,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Initializes the Web Audio analyzer graph used by the live visualization
+   * canvases.
+   *
+   * @returns {void} No return value.
+   */
   private setupAudioVisualizer(): void {
     if (!this.stream || this.audioContext) return;
 
@@ -1175,6 +1797,13 @@ class VoiceNotesApp {
     source.connect(this.analyserNode);
   }
 
+  /**
+   * Changes the active live-visualization mode and updates the visible canvas.
+   *
+   * @param {'bars' | 'waveform' | 'spectrogram'} type The visualization mode
+   * to enable.
+   * @returns {void} No return value.
+   */
   private setVisualizationType(type: 'bars' | 'waveform' | 'spectrogram'): void {
     if (!type) return;
     this.visualizationType = type;
@@ -1192,6 +1821,13 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Changes the color scheme used by live audio visualizations.
+   *
+   * @param {'red' | 'blue' | 'sunset' | 'mono'} scheme The color palette to
+   * apply.
+   * @returns {void} No return value.
+   */
   private setColorScheme(scheme: 'red' | 'blue' | 'sunset' | 'mono'): void {
       if (!scheme) return;
       this.colorScheme = scheme;
@@ -1199,6 +1835,13 @@ class VoiceNotesApp {
       this.vizColorSelector?.querySelector(`[data-color="${scheme}"]`)?.classList.add('active');
   }
 
+  /**
+   * Maps an analyzer magnitude value to a display color for the active
+   * visualization palette.
+   *
+   * @param {number} value The analyzer value in the range 0-255.
+   * @returns {string} The CSS color string for the current palette.
+   */
   private getColorForValue(value: number): string {
     const normalized = value / 255;
     switch (this.colorScheme) {
@@ -1227,6 +1870,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Runs the animation loop for the currently selected live audio
+   * visualization.
+   *
+   * @returns {void} No return value.
+   */
   private drawVisualization(): void {
     if (!this.isRecording) {
       if (this.waveformDrawingId) cancelAnimationFrame(this.waveformDrawingId);
@@ -1248,6 +1897,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Draws the bar-chart frequency visualization for the current microphone
+   * input.
+   *
+   * @returns {void} No return value.
+   */
   private drawFrequencyBars(): void {
     if (!this.analyserNode || !this.frequencyDataArray || !this.liveWaveformCtx || !this.liveWaveformCanvas) return;
     this.analyserNode.getByteFrequencyData(this.frequencyDataArray);
@@ -1282,6 +1937,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Draws the time-domain waveform visualization for the current microphone
+   * input.
+   *
+   * @returns {void} No return value.
+   */
   private drawTimeDomainWaveform(): void {
     if (!this.analyserNode || !this.timeDomainDataArray || !this.liveWaveformCtx || !this.liveWaveformCanvas) return;
     this.analyserNode.getByteTimeDomainData(this.timeDomainDataArray);
@@ -1314,7 +1975,13 @@ class VoiceNotesApp {
     ctx.lineTo(logicalWidth, logicalHeight / 2);
     ctx.stroke();
   }
-  
+
+  /**
+   * Draws the scrolling spectrogram visualization for the current microphone
+   * input.
+   *
+   * @returns {void} No return value.
+   */
   private drawSpectrogram(): void {
     if (!this.analyserNode || !this.frequencyDataArray || !this.liveSpectrogramCtx || !this.liveSpectrogramCanvas) return;
     this.analyserNode.getByteFrequencyData(this.frequencyDataArray);
@@ -1338,6 +2005,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Updates the live recording timer readout based on the current capture
+   * start time.
+   *
+   * @returns {void} No return value.
+   */
   private updateLiveTimer(): void {
     if (!this.isRecording || !this.liveRecordingTimerDisplay) return;
     const now = Date.now();
@@ -1351,6 +2024,12 @@ class VoiceNotesApp {
     this.liveRecordingTimerDisplay.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(hundredths).padStart(2, '0')}`;
   }
 
+  /**
+   * Switches the footer into live-recording mode and starts the visualization
+   * and timer loops.
+   *
+   * @returns {void} No return value.
+   */
   private startLiveDisplay(): void {
     if ( !this.recordingInterface || !this.liveRecordingTitle || !this.liveWaveformCanvas || !this.liveRecordingTimerDisplay ) return;
 
@@ -1394,6 +2073,12 @@ class VoiceNotesApp {
     this.timerIntervalId = window.setInterval(() => this.updateLiveTimer(), 50);
   }
 
+  /**
+   * Restores the footer from live-recording mode and tears down visualization
+   * resources.
+   *
+   * @returns {void} No return value.
+   */
   private stopLiveDisplay(): void {
     if (!this.recordingInterface) return;
 
@@ -1452,10 +2137,21 @@ class VoiceNotesApp {
     this.timeDomainDataArray = null;
   }
 
+  /**
+   * Requests microphone access, starts the MediaRecorder, and prepares the UI
+   * for a new capture session.
+   *
+   * @returns {Promise<void>} Resolves after recording has started or the error
+   * has been handled.
+   */
   private async startRecording(): Promise<void> {
     this.resetPlayback();
     this.prepareRecordingSession();
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone capture is unavailable in this desktop session.');
+      }
+
       this.audioChunks = [];
       if (this.stream) {
         this.stream.getTracks().forEach((track) => track.stop());
@@ -1539,7 +2235,7 @@ class VoiceNotesApp {
         errorName === 'PermissionDeniedError'
       ) {
         this.recordingStatus.textContent =
-          'Microphone permission denied. Please check browser settings and reload page.';
+          'Microphone permission denied. Check the desktop app permissions in System Settings, then restart the app.';
       } else if (
         errorName === 'NotFoundError' ||
         (errorName === 'DOMException' &&
@@ -1563,6 +2259,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Stops the active recording session and transitions the UI into processing
+   * mode.
+   *
+   * @returns {Promise<void>} Resolves after the stop request has been issued.
+   */
   private async stopRecording(): Promise<void> {
     if (this.mediaRecorder && this.isRecording) {
       try {
@@ -1584,6 +2286,13 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Prepares a recorded audio blob for AI processing and playback.
+   *
+   * @param {Blob} audioBlob The captured microphone audio to process.
+   * @returns {Promise<void>} Resolves after the transcription request has been
+   * started or the failure has been handled.
+   */
   private async processAudio(audioBlob: Blob): Promise<void> {
     if (audioBlob.size === 0) {
       this.recordingStatus.textContent =
@@ -1620,7 +2329,7 @@ class VoiceNotesApp {
       if (!base64Audio) throw new Error('Failed to convert audio to base64');
 
       const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
-      await this.getTranscription(base64Audio, mimeType);
+      await this.getTranscription(audioBlob, base64Audio, mimeType);
     } catch (error) {
       console.error('Error in processAudio:', error);
       this.recordingStatus.textContent =
@@ -1629,25 +2338,29 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Sends recorded audio to the currently selected speech-capable provider for
+   * transcription and dispatches the result into note, ATP, or Medium
+   * workflows.
+   *
+   * @param {Blob} audioBlob The recorded audio blob.
+   * @param {string} base64Audio The recorded audio encoded as base64.
+   * @param {string} mimeType The MIME type used for the recording.
+   * @returns {Promise<void>} Resolves after the transcription flow completes.
+   */
   private async getTranscription(
+    audioBlob: Blob,
     base64Audio: string,
     mimeType: string,
   ): Promise<void> {
     try {
       this.recordingStatus.textContent = 'Getting transcription...';
-      const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
-
-      const contents = [
-        {text: 'Generate a complete, detailed transcript of this audio.'},
-        {inlineData: {mimeType: mimeType, data: base64Audio}},
-      ];
-
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: contents,
+      const transcriptionText = await transcribeAudioWithProvider({
+        provider: this.getSelectedProvider(),
+        audioBlob,
+        base64Audio,
+        mimeType,
       });
-
-      const transcriptionText = response.text;
       
       if (this.recordingMode === 'atp') {
         if (transcriptionText) {
@@ -1733,6 +2446,15 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Uses the selected text provider to transform raw transcription text into a
+   * cleaner markdown note while preserving the original meaning.
+   *
+   * @param {string} transcriptionToPolish The raw transcription segment to
+   * polish.
+   * @returns {Promise<void>} Resolves after the polished note UI and model have
+   * been updated.
+   */
   private async getPolishedNote(transcriptionToPolish: string): Promise<void> {
     try {
       if (
@@ -1751,7 +2473,6 @@ class VoiceNotesApp {
       }
 
       this.recordingStatus.textContent = 'Polishing note...';
-      const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
 
       const prompt = `Take this raw transcription and create a polished, well-formatted note.
                     Remove filler words (um, uh, like), repetitions, and false starts.
@@ -1760,13 +2481,10 @@ class VoiceNotesApp {
 
                     Raw transcription:
                     ${transcriptionToPolish}`;
-      const contents = [{text: prompt}];
-
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: contents,
+      const polishedText = await generateTextWithProvider({
+        provider: this.getSelectedProvider(),
+        prompt,
       });
-      const polishedText = response.text;
       const currentNote = this.currentNote;
 
       if (polishedText && currentNote) {
@@ -1858,6 +2576,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Formats a note timestamp for display in the editor header.
+   *
+   * @param {number} timestamp The epoch timestamp to format.
+   * @returns {string} A locale-formatted date and time string.
+   */
   private formatTimestamp(timestamp: number): string {
     if (!timestamp) return '';
     const date = new Date(timestamp);
@@ -1870,6 +2594,14 @@ class VoiceNotesApp {
     });
   }
 
+  /**
+   * Renders the supplied note into the title, raw, polished, and metadata UI
+   * regions.
+   *
+   * @param {Note | null} note The note to display, or `null` to reset the UI
+   * to placeholders.
+   * @returns {Promise<void>} Resolves after markdown rendering has completed.
+   */
   private async displayNote(note: Note | null): Promise<void> {
     if (!note) {
       this.noteTimestamp.textContent = '';
@@ -1918,6 +2650,12 @@ class VoiceNotesApp {
     this.resetPlayback();
   }
 
+  /**
+   * Creates a fresh note, selects it, and resets any active recording or
+   * playback state.
+   *
+   * @returns {void} No return value.
+   */
   private createNewNote(): void {
     this.resetPlayback();
     const newNote: Note = {
@@ -1943,7 +2681,13 @@ class VoiceNotesApp {
       this.stopLiveDisplay();
     }
   }
-  
+
+  /**
+   * Deletes the currently selected note after user confirmation and persists
+   * the updated note collection.
+   *
+   * @returns {void} No return value.
+   */
   private deleteCurrentNote(): void {
     if (this.notes.length <= 1) {
         alert('Cannot delete the only note.');
@@ -1962,7 +2706,13 @@ class VoiceNotesApp {
         this.updateDeleteButtonState();
     }
   }
-  
+
+  /**
+   * Writes the editable note title back into the active note model when the
+   * title field loses focus.
+   *
+   * @returns {void} No return value.
+   */
   private saveCurrentNoteTitle(): void {
     const currentNote = this.currentNote;
     if (currentNote && this.editorTitle.textContent) {
@@ -1973,6 +2723,11 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Persists the full in-memory note list to local storage.
+   *
+   * @returns {void} No return value.
+   */
   private saveAllNotes(): void {
       this.saveCurrentNoteTitle();
       try {
@@ -1989,6 +2744,11 @@ class VoiceNotesApp {
       }
   }
 
+  /**
+   * Restores notes from local storage and initializes the first active note.
+   *
+   * @returns {void} No return value.
+   */
   private loadNotesFromStorage(): void {
       try {
           const savedNotes = localStorage.getItem('voice-notes-app-data');
@@ -2011,10 +2771,23 @@ class VoiceNotesApp {
       this.updateDeleteButtonState();
   }
 
+  /**
+   * Enables or disables the delete button based on the number of available
+   * notes.
+   *
+   * @returns {void} No return value.
+   */
   private updateDeleteButtonState(): void {
     this.deleteNoteButton.disabled = this.notes.length <= 1;
   }
-  
+
+  /**
+   * Configures the playback element for a newly recorded audio blob and shows
+   * the transport controls.
+   *
+   * @param {Blob} audioBlob The recorded audio to expose through the player.
+   * @returns {void} No return value.
+   */
   private setupAudioPlayer(audioBlob: Blob): void {
     if (this.audioPlayer.src) {
       URL.revokeObjectURL(this.audioPlayer.src);
@@ -2027,6 +2800,12 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Clears playback state, hides transport controls, and revokes any existing
+   * audio object URL.
+   *
+   * @returns {void} No return value.
+   */
   private resetPlayback(): void {
     this.playbackControls.classList.add('hidden');
     if (this.statusIndicatorDiv) {
@@ -2055,6 +2834,11 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Plays or pauses the current recording preview.
+   *
+   * @returns {void} No return value.
+   */
   private togglePlayback(): void {
     if (!this.audioPlayer.src || !this.currentAudioBlob) return;
 
@@ -2074,11 +2858,22 @@ class VoiceNotesApp {
     }
   }
 
+  /**
+   * Seeks the audio preview to the position selected in the range control.
+   *
+   * @returns {void} No return value.
+   */
   private handleSeekBarChange(): void {
     if (!this.audioPlayer.src || !this.currentAudioBlob) return;
     this.audioPlayer.currentTime = parseFloat(this.seekBar.value);
   }
 
+  /**
+   * Formats a playback duration in seconds as a `MM:SS` display string.
+   *
+   * @param {number} timeInSeconds The duration to format.
+   * @returns {string} The formatted clock string.
+   */
   private formatTime(timeInSeconds: number): string {
     const seconds = Math.floor(timeInSeconds);
     const minutes = Math.floor(seconds / 60);
@@ -2088,6 +2883,12 @@ class VoiceNotesApp {
     ).padStart(2, '0')}`;
   }
 
+  /**
+   * Refreshes the playback seek bar and elapsed-time label while audio is
+   * playing.
+   *
+   * @returns {void} No return value.
+   */
   private handleTimeUpdate(): void {
     this.seekBar.value = String(this.audioPlayer.currentTime);
     this.currentTimeDisplay.textContent = this.formatTime(
@@ -2095,6 +2896,11 @@ class VoiceNotesApp {
     );
   }
 
+  /**
+   * Initializes playback duration metadata after the recorded audio has loaded.
+   *
+   * @returns {void} No return value.
+   */
   private handleLoadedMetadata(): void {
     this.seekBar.max = String(this.audioPlayer.duration);
     this.totalDurationDisplay.textContent = this.formatTime(
@@ -2102,6 +2908,11 @@ class VoiceNotesApp {
     );
   }
 
+  /**
+   * Resets the play/pause button state after the audio preview finishes.
+   *
+   * @returns {void} No return value.
+   */
   private handleAudioEnd(): void {
     const icon = this.playPauseButton.querySelector('i');
     if (icon) {
@@ -2111,6 +2922,11 @@ class VoiceNotesApp {
     this.audioPlayer.currentTime = 0;
   }
 
+  /**
+   * Downloads the current audio recording to the local machine.
+   *
+   * @returns {void} No return value.
+   */
   private handleDownload(): void {
     if (!this.currentAudioBlob) return;
 
@@ -2129,6 +2945,11 @@ class VoiceNotesApp {
     document.body.removeChild(a);
   }
 
+  /**
+   * Starts or stops browser speech synthesis for the current polished note.
+   *
+   * @returns {void} No return value.
+   */
   private toggleReadAloud(): void {
     if (this.isSpeaking) {
       window.speechSynthesis.cancel();
@@ -2178,6 +2999,14 @@ class VoiceNotesApp {
     window.speechSynthesis.speak(this.currentUtterance);
   }
 
+  /**
+   * Converts the current polished note into an ATP-formatted handoff block
+   * using Knowledge Base context and optional spoken instructions.
+   *
+   * @param {string} [additionalContext=''] Extra instructions captured from the
+   * user for ATP formatting.
+   * @returns {Promise<void>} Resolves after ATP formatting completes.
+   */
   private async formatAsATP(additionalContext: string = ''): Promise<void> {
     const noteText = this.polishedNote.innerText;
 
@@ -2206,7 +3035,6 @@ class VoiceNotesApp {
     const knowledgeBaseContext = this.serializeKnowledgeBase(this.knowledgeBaseData);
 
     try {
-      const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
       const prompt = `You are an AI assistant specializing in the Artemis Transmission Protocol (ATP) and knowledge synthesis. Your goal is to generate a structured prompt for *another* executing agent. 
       
       **CRITICAL TASK:** You must actively use the user's Knowledge Base (folders, files, and file content) to ground the note. You must identify updates to the Knowledge Base and deep conceptual links. When translating raw ideas into structured output, identify if anything directly ties to this information, or if documents or themes are mentioned, to provide deeper insight into the meaning. This will lead to a better output, offering insights such as "This is similar to what you were thinking here" and highlighting potentially missing information.
@@ -2242,10 +3070,10 @@ Generate a JSON object.
     - Format: "#tag - /path/to/source - Insight description."`;
 
 
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: [{ text: prompt }],
-        config: {
+      const jsonStr = (await generateTextWithProvider({
+        provider: this.getSelectedProvider(),
+        prompt,
+        geminiConfig: {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -2256,9 +3084,9 @@ Generate a JSON object.
               actionType: { type: Type.STRING },
               targetZone: { type: Type.STRING },
               specialNotes: { type: Type.STRING },
-              suggestedKbActions: { 
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING } 
+              suggestedKbActions: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
               },
               metaLink: { type: Type.STRING },
             },
@@ -2274,9 +3102,7 @@ Generate a JSON object.
             ],
           },
         },
-      });
-
-      const jsonStr = response.text.trim();
+      })).trim();
       const atpData = JSON.parse(jsonStr);
 
       // Format the suggested KB actions list
@@ -2328,6 +3154,12 @@ ${textToFormat}`;
     }
   }
 
+  /**
+   * Starts or stops the Medium-post instruction recording workflow.
+   *
+   * @returns {Promise<void>} Resolves after the recording state change
+   * completes.
+   */
   private async toggleMediumRecording(): Promise<void> {
     const noteText = this.polishedNote.innerText;
     if (!noteText || this.polishedNote.classList.contains('placeholder-active')) {
@@ -2353,6 +3185,14 @@ ${textToFormat}`;
     }
   }
 
+  /**
+   * Converts the current polished note into a Medium-style article using
+   * optional spoken instructions and Knowledge Base context.
+   *
+   * @param {string} [additionalContext=''] Extra formatting guidance captured
+   * from the user.
+   * @returns {Promise<void>} Resolves after article formatting completes.
+   */
   private async formatAsMediumPost(additionalContext: string = ''): Promise<void> {
     const noteText = this.polishedNote.innerText;
 
@@ -2380,7 +3220,6 @@ ${textToFormat}`;
     const knowledgeBaseContext = this.serializeKnowledgeBase(this.knowledgeBaseData);
 
     try {
-      const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
       const prompt = `You are an expert Medium.com content editor and SEO specialist. Transform the user's rambling voice note into a polished, publication-ready Medium post.
 
 **CRITICAL TASK:** Use the Knowledge Base to:
@@ -2426,10 +3265,10 @@ Generate a JSON object with:
 - Include hook in first paragraph
 - End with clear takeaway or call-to-action`;
 
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: [{ text: prompt }],
-        config: {
+      const jsonStr = (await generateTextWithProvider({
+        provider: this.getSelectedProvider(),
+        prompt,
+        geminiConfig: {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -2480,9 +3319,7 @@ Generate a JSON object with:
             ]
           }
         }
-      });
-
-      const jsonStr = response.text.trim();
+      })).trim();
       const mediumData = JSON.parse(jsonStr);
 
       if (!mediumData.title || !mediumData.sections || mediumData.sections.length === 0) {
@@ -2561,6 +3398,12 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
     }
   }
 
+  /**
+   * Rebuilds the polished note from the current raw transcription without
+   * requiring a new recording.
+   *
+   * @returns {Promise<void>} Resolves after note polishing completes.
+   */
   private async refreshPolishedContent(): Promise<void> {
     const rawText = this.rawTranscription.innerText;
 
@@ -2584,11 +3427,24 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
     }
   }
 
+  /**
+   * Submits the polished note text to the video generation workflow and keeps
+   * the progress modal updated until completion.
+   *
+   * @returns {Promise<void>} Resolves after the modal has been updated with a
+   * result or error state.
+   */
   private async startVideoGeneration(): Promise<void> {
     const prompt = this.polishedNote.innerText;
+    const provider = this.getSelectedProvider();
 
     if (!prompt || this.polishedNote.classList.contains('placeholder-active')) {
       alert('Please create a note first before generating a video.');
+      return;
+    }
+
+    if (provider !== 'gemini') {
+      alert('Video generation currently requires the Gemini provider.');
       return;
     }
 
@@ -2615,10 +3471,10 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
           console.warn('window.aistudio is not defined. API key selection for Veo models may not function as expected.');
       }
       
-      const ai = new GoogleGenAI({apiKey: process.env.API_KEY}); // Initialize here
+      const ai = new GoogleGenAI({apiKey: requireApiKey('gemini')});
 
       let operation = await ai.models.generateVideos({
-        model: 'veo-2.0-generate-001',
+        model: GEMINI_VIDEO_MODEL,
         prompt: prompt,
         config: {
           numberOfVideos: 1,
@@ -2636,7 +3492,7 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
 
       const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
       if (downloadLink) {
-          const fetchUrl = `${downloadLink}&key=${process.env.API_KEY}`;
+          const fetchUrl = `${downloadLink}&key=${requireApiKey('gemini')}`;
           const response = await fetch(fetchUrl);
           if (!response.ok) {
             throw new Error(`Failed to fetch video file: ${response.status} ${response.statusText}`);
@@ -2664,10 +3520,21 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
     }
   }
 
+  /**
+   * Reveals the video-generation modal overlay.
+   *
+   * @returns {void} No return value.
+   */
   private showVideoModal(): void {
     this.videoModal.classList.remove('hidden');
   }
 
+  /**
+   * Hides the video-generation modal and releases any generated video object
+   * URL resources.
+   *
+   * @returns {void} No return value.
+   */
   private hideVideoModal(): void {
     this.videoModal.classList.add('hidden');
     this.generatedVideo.pause();
@@ -2679,6 +3546,14 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
     this.videoDownloadLink.removeAttribute('href');
   }
 
+  /**
+   * Switches the video-generation modal between loading, result, and error
+   * presentations.
+   *
+   * @param {'loading' | 'result' | 'error'} state The modal state to display.
+   * @param {any} data The state-specific payload used to populate the modal.
+   * @returns {void} No return value.
+   */
   private updateModalState(state: 'loading' | 'result' | 'error', data: any): void {
       this.modalLoadingState.classList.add('hidden');
       this.modalResultState.classList.add('hidden');
@@ -2705,6 +3580,12 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
   }
 }
 
+/**
+ * Boots the renderer application once the static HTML shell is ready and
+ * applies placeholder behavior to editable note fields.
+ *
+ * @returns No return value.
+ */
 document.addEventListener('DOMContentLoaded', () => {
   new VoiceNotesApp();
 
@@ -2713,6 +3594,11 @@ document.addEventListener('DOMContentLoaded', () => {
     .forEach((el) => {
       const placeholder = el.getAttribute('placeholder')!;
 
+      /**
+       * Synchronizes the editable element content with its placeholder state.
+       *
+       * @returns No return value.
+       */
       function updatePlaceholderState() {
         const currentText = (
           el.id === 'polishedNote' ? el.innerText : el.textContent

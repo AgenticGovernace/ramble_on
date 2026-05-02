@@ -43,6 +43,14 @@
                 <div id="noteTimestamp" class="note-timestamp"></div>
               </div>
               <div class="note-actions">
+                  <label class="provider-select-wrapper" title="Select AI provider">
+                      <span class="provider-select-label">AI</span>
+                      <select id="providerSelect" class="provider-select">
+                          <option value="gemini">Gemini</option>
+                          <option value="openai">OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                      </select>
+                  </label>
                   <button class="action-button-header" id="formatATPButton" title="Format as ATP Prompt">
                       <i class="fas fa-brain"></i>
                   </button>

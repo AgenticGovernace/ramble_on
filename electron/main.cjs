@@ -52,10 +52,9 @@ const configureMediaPermissions = async () => {
 
   defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
     if (permission === 'media') {
-      callback(
-        isAllowedAppOrigin(details.requestingUrl) &&
-          (details.mediaType === 'audio' || details.mediaType === 'unknown'),
-      );
+      const mediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+      const audioAllowed = mediaTypes.length === 0 || mediaTypes.includes('audio');
+      callback(isAllowedAppOrigin(details.requestingUrl) && audioAllowed);
       return;
     }
 
