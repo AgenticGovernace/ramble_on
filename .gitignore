@@ -11,7 +11,23 @@ kb/Projects/Codex_Experiments/README.md
 kb/Personal/goals_2025.md
 /.idea
 .Rproj.user
+<<<<<<< Updated upstream
 /dist
 /dist
 /.air
 /wireup
+=======
+.Rhistory
+/dist
+/files 2
+/kb
+files.zip
+d.md
+ramble_on.Rproj
+/src/ramble_on.egg-info
+/Ramble On.app
+/build
+/.run
+>>>>>>> Stashed changes
+/src/ramble_on.egg-info
+/Ramble On.app/Contents

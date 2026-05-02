@@ -30,8 +30,12 @@
     "@types/node": "^22.14.0",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
+<<<<<<< Updated upstream
     "jsdom": "^26.0.0",
     "electron": "^41.1.1",
+=======
+    "electron": "^35.1.2",
+>>>>>>> Stashed changes
     "electron-builder": "^26.7.0",
     "jsdom": "^26.0.0",
     "typescript": "~5.8.2",
@@ -58,9 +62,15 @@
         "dmg",
         "zip"
       ],
+<<<<<<< Updated upstream
+=======
+      "hardenedRuntime": false,
+>>>>>>> Stashed changes
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Ramble On uses the microphone to record your thoughts.",
-        "NSCameraUsageDescription": "Ramble On can use the camera when needed."
+        "NSCameraUsageDescription": "Ramble On can use the camera when needed.",
+        "com.apple.security.device.audio-input": true,
+        "com.apple.security.device.camera": true
       }
     },
     "dmg": {
