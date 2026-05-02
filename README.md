@@ -23,16 +23,15 @@ Core runtime files:
 
 Supporting files:
 
-- `Makefile`: Common development, test, build, and cleanup targets.
-- `.github/workflows/ci.yml`: Cross-platform CI for validation and packaging smoke tests.
-- `.github/workflows/release.yml`: Tagged release packaging and GitHub Release publishing.
-- `build/README.md`: Notes about Electron Builder resource usage.
+- `package.json`: Dependencies, scripts, and Electron Builder configuration.
+- `vite.config.ts`: Vite and Vitest configuration with environment wiring.
+- `tsconfig.json`: TypeScript compiler settings.
 
 ## Architecture Overview
 
 ### 1. Renderer Layer
 
-The renderer is implemented as a single controller class, `VoiceNotesApp`, in [`src/main.tsx`](/Volumes/Homebase/sourcerepo/ramble_on/src/main.tsx). This class acts as the composition root for the browser-side application.
+The renderer is implemented as a single controller class, `VoiceNotesApp`, in [`src/main.tsx`](src/main.tsx). This class acts as the composition root for the browser-side application.
 
 Its responsibilities are:
 
@@ -63,7 +62,7 @@ Key renderer workflows:
 
 ### 2. Electron Main Process
 
-The Electron main process in [`electron/main.cjs`](/Volumes/Homebase/sourcerepo/ramble_on/electron/main.cjs) is the desktop orchestration layer.
+The Electron main process in [`electron/main.cjs`](electron/main.cjs) is the desktop orchestration layer.
 
 Its responsibilities are:
 
@@ -91,7 +90,7 @@ Persistence model:
 
 ### 3. Preload Bridge
 
-[`electron/preload.cjs`](/Volumes/Homebase/sourcerepo/ramble_on/electron/preload.cjs) uses `contextBridge.exposeInMainWorld()` to publish a constrained `window.rambleOnDB` API. This is the app's main boundary between untrusted renderer code and privileged Electron capabilities.
+[`electron/preload.cjs`](electron/preload.cjs) uses `contextBridge.exposeInMainWorld()` to publish a constrained `window.rambleOnDB` API. This is the app's main boundary between untrusted renderer code and privileged Electron capabilities.
 
 Exposed operations:
 
@@ -110,7 +109,7 @@ This is the repository's clearest service-boundary pattern. It is not dependency
 
 ### 4. MCP Server Layer
 
-[`electron/mcp-server.cjs`](/Volumes/Homebase/sourcerepo/ramble_on/electron/mcp-server.cjs) exposes a local HTTP JSON-RPC server intended to be consumed as an MCP tool provider.
+[`electron/mcp-server.cjs`](electron/mcp-server.cjs) exposes a local HTTP JSON-RPC server intended to be consumed as an MCP tool provider.
 
 Responsibilities:
 
@@ -210,19 +209,7 @@ Build outputs:
 
 ### CI/CD
 
-CI in [`.github/workflows/ci.yml`](/Volumes/Homebase/sourcerepo/ramble_on/.github/workflows/ci.yml):
-
-- Runs on Ubuntu, Windows, and macOS
-- Uses Node 20
-- Executes `npm run ci`
-- Smoke-tests Electron packaging with `npm run desktop:build`
-
-Release flow in [`.github/workflows/release.yml`](/Volumes/Homebase/sourcerepo/ramble_on/.github/workflows/release.yml):
-
-- Triggers on `v*` tags
-- Builds desktop packages on Ubuntu, Windows, and macOS
-- Uploads artifacts
-- Publishes GitHub release assets with `gh release`
+CI runs `npm run ci` (typecheck, test, build) against the Node LTS baseline. Desktop packaging is verified with `npm run desktop:build`.
 
 ### External Dependencies
 
@@ -380,8 +367,7 @@ Provider selection:
 
 Current test coverage is minimal and focuses on static entry points and basic DOM access:
 
-- [`tests/app.test.ts`](/Volumes/Homebase/sourcerepo/ramble_on/tests/app.test.ts)
-- [`tests/sample.test.ts`](/Volumes/Homebase/sourcerepo/ramble_on/tests/sample.test.ts)
+- [`tests/app.test.ts`](tests/app.test.ts)
 
 The tests do not currently exercise:
 

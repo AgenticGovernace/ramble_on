@@ -571,6 +571,13 @@ const registerIpcHandlers = () => {
     mainWindow?.webContents.send('kb:updated');
     return { success: true, path: newRelative };
   });
+
+  ipcMain.handle('app:get-api-keys', () => ({
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY || process.env.API_KEY || '',
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+    AI_PROVIDER: process.env.AI_PROVIDER || '',
+  }));
 };
 
 app.whenReady().then(async () => {

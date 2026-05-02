@@ -73,8 +73,14 @@ const writeJson = (res, statusCode, payload) => {
   res.end(JSON.stringify(payload));
 };
 
-const applyCors = (res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+const applyCors = (req, res) => {
+  const origin = req.headers.origin || '';
+  if (
+    origin.startsWith('http://127.0.0.1') ||
+    origin.startsWith('http://localhost')
+  ) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
@@ -119,7 +125,7 @@ const startMcpServer = async () => {
   if (httpServer) return httpServer;
 
   httpServer = http.createServer(async (req, res) => {
-    applyCors(res);
+    applyCors(req, res);
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -158,18 +164,21 @@ const startMcpServer = async () => {
     res.end();
   });
 
-  httpServer.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.warn(
-        `[ramble-on MCP] Port ${CONFIG.port} in use — MCP server not started. App will run without MCP.`,
-      );
-    } else {
-      console.error('[ramble-on MCP] Server error:', err);
-    }
-  });
-
-  await new Promise((resolve) => {
+  await new Promise((resolve, reject) => {
+    const onError = (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(
+          `[ramble-on MCP] Port ${CONFIG.port} in use — MCP server not started. App will run without MCP.`,
+        );
+        httpServer = null;
+        resolve();
+      } else {
+        reject(err);
+      }
+    };
+    httpServer.once('error', onError);
     httpServer.listen(CONFIG.port, '127.0.0.1', () => {
+      httpServer.removeListener('error', onError);
       const toolNames = Object.keys(TOOL_REGISTRY).join(', ');
       console.log(
         `[ramble-on MCP] Server running at http://127.0.0.1:${CONFIG.port}`,

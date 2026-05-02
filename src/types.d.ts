@@ -56,6 +56,12 @@ declare global {
         newName: string;
       }) => Promise<{ success: boolean; path: string }>;
       onKnowledgeBaseUpdated: (callback: () => void) => void;
+      getApiKeys: () => Promise<{
+        GEMINI_API_KEY: string;
+        OPENAI_API_KEY: string;
+        ANTHROPIC_API_KEY: string;
+        AI_PROVIDER: string;
+      }>;
     };
   }
 }

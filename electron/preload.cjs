@@ -82,6 +82,15 @@ contextBridge.exposeInMainWorld('rambleOnDB', {
    */
   renameKnowledgeBasePath: (payload) => ipcRenderer.invoke('kb:rename-path', payload),
   /**
+   * Retrieves the API keys configured in the main process environment.
+   * Keys are provided at runtime via IPC so they are not baked into the
+   * renderer bundle.
+   *
+   * @returns {Promise<{GEMINI_API_KEY: string, OPENAI_API_KEY: string, ANTHROPIC_API_KEY: string, AI_PROVIDER: string}>}
+   * The configured API keys and default provider.
+   */
+  getApiKeys: () => ipcRenderer.invoke('app:get-api-keys'),
+  /**
    * Registers a renderer callback for Knowledge Base change notifications.
    *
    * @param {Function} callback The callback invoked when the Knowledge Base

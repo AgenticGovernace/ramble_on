@@ -14,7 +14,6 @@ npm run test             # Vitest run (jsdom environment)
 npm run ci               # typecheck + test + build
 npm run build            # Vite web bundle → dist/
 npm run desktop:build    # Electron Builder package → dist-electron/
-make help                # all Makefile targets
 ```
 
 ## Architecture
@@ -45,7 +44,7 @@ make help                # all Makefile targets
 
 ## Environment Variables
 
-Copy `.env.example` to `.env.local` (or `env.local`) before running.
+Create `.env.local` (or `env.local`) in the project root with the required variables before running.
 
 | Variable | Purpose |
 |---|---|

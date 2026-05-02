@@ -18,6 +18,12 @@ interface TextGenerationOptions {
   };
 }
 
+/**
+ * Runtime API key cache populated from the Electron main process via IPC.
+ * Keys are fetched once at startup so they are never baked into the bundle.
+ * Falls back to build-time env values when running outside Electron.
+ */
+let runtimeApiKeys: Record<string, string> = {};
 const PROVIDER_STORAGE_KEY = 'ramble-on-ai-provider';
 const DEFAULT_PROVIDER = normalizeProvider(process.env.AI_PROVIDER);
 const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-pro';
@@ -52,12 +58,12 @@ function normalizeProvider(provider: string | undefined): AiProvider {
  */
 function getApiKey(provider: AiProvider): string {
   if (provider === 'openai') {
-    return process.env.OPENAI_API_KEY || '';
+    return runtimeApiKeys.OPENAI_API_KEY || '';
   }
   if (provider === 'anthropic') {
-    return process.env.ANTHROPIC_API_KEY || '';
+    return runtimeApiKeys.ANTHROPIC_API_KEY || '';
   }
-  return process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  return runtimeApiKeys.GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY || '';
 }
 
 /**
@@ -125,7 +131,12 @@ function resolveSpeechProvider(provider: AiProvider): AiProvider {
   if (getApiKey('openai')) {
     return 'openai';
   }
-  return 'gemini';
+  if (getApiKey('gemini')) {
+    return 'gemini';
+  }
+  throw new Error(
+    'No transcription provider available. Configure OPENAI_API_KEY or GEMINI_API_KEY.',
+  );
 }
 
 /**
@@ -3588,6 +3599,14 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
  */
 document.addEventListener('DOMContentLoaded', () => {
   new VoiceNotesApp();
+
+  // Asynchronously populate runtime API keys from the Electron main process.
+  // Keys are fetched via IPC so they are never baked into the renderer bundle.
+  window.rambleOnDB?.getApiKeys?.().then((keys) => {
+    if (keys) runtimeApiKeys = keys;
+  }).catch((err) => {
+    console.warn('[ramble-on] Failed to load API keys from main process:', err);
+  });
 
   document
     .querySelectorAll<HTMLElement>('[contenteditable][placeholder]')
