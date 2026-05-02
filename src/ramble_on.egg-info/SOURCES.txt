@@ -4,5 +4,4 @@ pyproject.toml
 src/ramble_on.egg-info/PKG-INFO
 src/ramble_on.egg-info/SOURCES.txt
 src/ramble_on.egg-info/dependency_links.txt
-src/ramble_on.egg-info/requires.txt
 src/ramble_on.egg-info/top_level.txt
