@@ -591,32 +591,39 @@ class VoiceNotesApp {
    * (Electron user-data) or the `AI_PROVIDER` env var, with a one-shot
    * migration from any legacy `localStorage` value.
    *
+   * Migration order: a legacy `localStorage` value always wins on first run
+   * so a user who explicitly chose a provider in an older build is not
+   * silently reset to the env default. Failures in the IPC bridge fall back
+   * to `FALLBACK_PROVIDER` rather than rejecting this fire-and-forget init.
+   *
    * @returns {Promise<void>} Resolves once the selector reflects the
    * persisted provider.
    */
   private async initProviderSelection(): Promise<void> {
     this.providerSelect.disabled = true;
+    let resolved: AiProvider = FALLBACK_PROVIDER;
     try {
       const bridge = window.rambleOnDB;
-      let resolved: AiProvider = FALLBACK_PROVIDER;
+      const legacy = localStorage.getItem(PROVIDER_STORAGE_KEY);
 
-      if (bridge?.getProviderPreference) {
+      if (legacy && bridge?.setProviderPreference) {
+        // Legacy localStorage value always wins migration. After this point,
+        // preferences.json holds the source of truth.
+        const migrated = normalizeProvider(legacy);
+        await bridge.setProviderPreference(migrated);
+        localStorage.removeItem(PROVIDER_STORAGE_KEY);
+        resolved = migrated;
+      } else if (bridge?.getProviderPreference) {
         const remote = await bridge.getProviderPreference();
-        const legacy = localStorage.getItem(PROVIDER_STORAGE_KEY);
-
-        if (!remote && legacy) {
-          const migrated = normalizeProvider(legacy);
-          await bridge.setProviderPreference?.(migrated);
-          localStorage.removeItem(PROVIDER_STORAGE_KEY);
-          resolved = migrated;
-        } else if (remote) {
-          resolved = normalizeProvider(remote);
-          if (legacy) localStorage.removeItem(PROVIDER_STORAGE_KEY);
-        }
+        if (remote) resolved = normalizeProvider(remote);
       }
-
-      this.providerSelect.value = resolved;
+    } catch (err) {
+      console.warn(
+        '[ramble-on] Failed to load provider preference, falling back:',
+        err,
+      );
     } finally {
+      this.providerSelect.value = resolved;
       this.providerSelect.disabled = false;
       this.updateProviderSelectionUI();
     }
