@@ -1,0 +1,53 @@
+cloud-architecture-diagram
+
+title Ramble On - Voice Notes Architecture- Voice Notes Architecture
+
+direction right
+textSize large
+
+Desktop App [icon: monitor] {
+  Electron Main [icon: cpu] {
+    IPC Handlers [icon: git-merge]
+    SQLite DB [icon: database]
+    Chokidar Watcher [icon: eye]
+  }
+
+  Renderer [icon: layout] {
+    Vite Frontend [icon: zap]
+    Voice Recorder [icon: mic]
+    Waveform Visualizer [icon: activity]
+  }
+
+  Preload Bridge [icon: link]
+}
+
+
+Google Gemini [icon: google]
+
+Browser TTS [icon: volume-2]
+Notion [icon: notion] {
+  Notion Backend Storage [icon:database]
+}
+MCP Server [icon: server] {
+  Context Router [icon:git-merge]
+}
+
+// Internal connections
+Voice Recorder > IPC Handlers: audio data
+Vite Frontend <> Preload Bridge: context bridge
+Preload Bridge <> IPC Handlers: IPC invoke/handle
+IPC Handlers <> SQLite DB: persist notes
+Chokidar Watcher --> SQLite DB: sync KB files
+
+// External AI connections
+Vite Frontend > Google Gemini: transcribe & polish
+Vite Frontend > Google Gemini: ATP formatting
+Vite Frontend > Google Gemini: Medium post generation
+Vite Frontend > Google Gemini: video generation
+
+// TTS
+Vite Frontend > Browser TTS: read aloud
+Chokidar Watcher --> Notion Backend Storage: sync changes
+Vite Frontend <> Context Router: contextual info
+Context Router <> Notion Backend Storage: route context
+
