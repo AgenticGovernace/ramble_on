@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const chokidar = require('chokidar');
 const Database = require('better-sqlite3');
 const { startMcpServer, stopMcpServer } = require('./mcp-server.cjs');
+const aiClient = require('./mcp/clients/ai-client.cjs');
+const { normalizeProvider } = require('./mcp/env.cjs');
 const { ok, err, assertResult } = require('./lib/result.cjs');
 
 const SKILL_NAME = 'ramble-on';
@@ -629,12 +631,72 @@ const registerIpcHandlers = () => {
     return { success: true, path: newRelative };
   });
 
-  ipcMain.handle('app:get-api-keys', () => ({
-    GEMINI_API_KEY: process.env.GEMINI_API_KEY || process.env.API_KEY || '',
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
-    AI_PROVIDER: process.env.AI_PROVIDER || '',
-  }));
+  const PREFERENCES_FILE = path.join(app.getPath('userData'), 'preferences.json');
+
+  const readPreferences = async () => {
+    try {
+      const raw = await fsp.readFile(PREFERENCES_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+
+  const writePreferences = async (next) => {
+    await fsp.mkdir(path.dirname(PREFERENCES_FILE), { recursive: true });
+    await fsp.writeFile(
+      PREFERENCES_FILE,
+      JSON.stringify(next, null, 2),
+      'utf8',
+    );
+  };
+
+  ipcMain.handle('app:get-provider-preference', async () => {
+    const prefs = await readPreferences();
+    if (prefs && typeof prefs.aiProvider === 'string' && prefs.aiProvider) {
+      return normalizeProvider(prefs.aiProvider);
+    }
+    if (process.env.AI_PROVIDER) {
+      return normalizeProvider(process.env.AI_PROVIDER);
+    }
+    return '';
+  });
+
+  ipcMain.handle('app:set-provider-preference', async (_event, provider) => {
+    const normalized = normalizeProvider(provider);
+    const existing = (await readPreferences()) || {};
+    await writePreferences({ ...existing, aiProvider: normalized });
+    return { success: true, provider: normalized };
+  });
+
+  ipcMain.handle('ai:generate-text', async (_event, payload) => {
+    const { provider, prompt, geminiConfig } = payload || {};
+    if (typeof prompt !== 'string' || !prompt) {
+      throw new Error('ai:generate-text requires a non-empty prompt.');
+    }
+    return aiClient.generateText({ provider, prompt, geminiConfig });
+  });
+
+  ipcMain.handle('ai:transcribe-audio', async (_event, payload) => {
+    const { provider, audioBase64, mimeType } = payload || {};
+    if (typeof audioBase64 !== 'string' || !audioBase64) {
+      throw new Error('ai:transcribe-audio requires audioBase64.');
+    }
+    if (typeof mimeType !== 'string' || !mimeType) {
+      throw new Error('ai:transcribe-audio requires mimeType.');
+    }
+    return aiClient.transcribeAudio({ provider, audioBase64, mimeType });
+  });
+
+  ipcMain.handle('ai:generate-video', async (_event, payload) => {
+    const { prompt } = payload || {};
+    if (typeof prompt !== 'string' || !prompt) {
+      throw new Error('ai:generate-video requires a non-empty prompt.');
+    }
+    return aiClient.generateVideo({ prompt });
+  });
 
   ipcMain.handle('skill:install', async () => {
     try {
