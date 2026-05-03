@@ -58,12 +58,28 @@ declare global {
         newName: string;
       }) => Promise<{ success: boolean; path: string }>;
       onKnowledgeBaseUpdated: (callback: () => void) => void;
-      getApiKeys: () => Promise<{
-        GEMINI_API_KEY: string;
-        OPENAI_API_KEY: string;
-        ANTHROPIC_API_KEY: string;
-        AI_PROVIDER: string;
-      }>;
+      getProviderPreference: () => Promise<
+        'gemini' | 'openai' | 'anthropic' | ''
+      >;
+      setProviderPreference: (
+        provider: 'gemini' | 'openai' | 'anthropic',
+      ) => Promise<{ success: boolean; provider: string }>;
+      generateText: (payload: {
+        provider?: 'gemini' | 'openai' | 'anthropic';
+        prompt: string;
+        geminiConfig?: {
+          responseMimeType?: string;
+          responseSchema?: object;
+        };
+      }) => Promise<string>;
+      transcribeAudio: (payload: {
+        provider?: 'gemini' | 'openai' | 'anthropic';
+        audioBase64: string;
+        mimeType: string;
+      }) => Promise<string>;
+      generateVideo: (payload: {
+        prompt: string;
+      }) => Promise<{ buffer: ArrayBuffer; contentType: string }>;
       installSkill: () => Promise<
         Result<
           { installedAt: string; files: string[] },

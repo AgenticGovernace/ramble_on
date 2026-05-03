@@ -4,7 +4,7 @@
 */
 /* tslint:disable */
 
-import {GoogleGenAI, Type} from '@google/genai';
+import {Type} from '@google/genai';
 import {marked} from 'marked';
 
 type AiProvider = 'gemini' | 'openai' | 'anthropic';
@@ -18,24 +18,8 @@ interface TextGenerationOptions {
   };
 }
 
-/**
- * Runtime API key cache populated from the Electron main process via IPC.
- * Keys are fetched once at startup so they are never baked into the bundle.
- * Falls back to build-time env values when running outside Electron.
- */
-let runtimeApiKeys: Record<string, string> = {};
 const PROVIDER_STORAGE_KEY = 'ramble-on-ai-provider';
-const DEFAULT_PROVIDER = normalizeProvider(process.env.AI_PROVIDER);
-const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-pro';
-const GEMINI_TRANSCRIPTION_MODEL =
-  process.env.GEMINI_TRANSCRIPTION_MODEL || GEMINI_TEXT_MODEL;
-const GEMINI_VIDEO_MODEL =
-  process.env.GEMINI_VIDEO_MODEL || 'veo-2.0-generate-001';
-const OPENAI_TEXT_MODEL = process.env.OPENAI_TEXT_MODEL || 'gpt-4.1-mini';
-const OPENAI_TRANSCRIPTION_MODEL =
-  process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe';
-const ANTHROPIC_TEXT_MODEL =
-  process.env.ANTHROPIC_TEXT_MODEL || 'claude-3-5-sonnet-latest';
+const FALLBACK_PROVIDER: AiProvider = 'gemini';
 
 /**
  * Normalizes a provider identifier into one of the supported AI backends.
@@ -51,121 +35,24 @@ function normalizeProvider(provider: string | undefined): AiProvider {
 }
 
 /**
- * Reads the configured API key for the requested AI provider.
+ * Asserts the privileged preload bridge is available before delegating an AI
+ * call. Renderer-side AI helpers exist only to forward to the main process.
  *
- * @param {AiProvider} provider The provider whose API key is needed.
- * @returns {string} The configured API key or an empty string when missing.
+ * @returns {NonNullable<Window['rambleOnDB']>} The bridge proxy.
  */
-function getApiKey(provider: AiProvider): string {
-  if (provider === 'openai') {
-    return runtimeApiKeys.OPENAI_API_KEY || '';
+function requireBridge(): NonNullable<Window['rambleOnDB']> {
+  const bridge = window.rambleOnDB;
+  if (!bridge) {
+    throw new Error(
+      'AI features require the desktop app — the renderer cannot reach the main process.',
+    );
   }
-  if (provider === 'anthropic') {
-    return runtimeApiKeys.ANTHROPIC_API_KEY || '';
-  }
-  return runtimeApiKeys.GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  return bridge;
 }
 
 /**
- * Normalizes a browser-provided audio MIME type to its base media type.
- *
- * @param {string} mimeType The raw MIME type reported by MediaRecorder.
- * @returns {string} The MIME type without codec parameters.
- */
-function getBaseMimeType(mimeType: string): string {
-  return mimeType.split(';', 1)[0].trim().toLowerCase();
-}
-
-/**
- * Maps a supported audio MIME type to a stable file extension for uploads.
- *
- * @param {string} mimeType The raw MIME type reported by MediaRecorder.
- * @returns {string} The file extension expected by transcription endpoints.
- */
-function getAudioFileExtension(mimeType: string): string {
-  const baseMimeType = getBaseMimeType(mimeType);
-
-  switch (baseMimeType) {
-    case 'audio/webm':
-      return 'webm';
-    case 'audio/mp4':
-    case 'audio/m4a':
-      return 'm4a';
-    case 'audio/mpeg':
-      return 'mp3';
-    case 'audio/wav':
-    case 'audio/x-wav':
-      return 'wav';
-    case 'audio/ogg':
-      return 'ogg';
-    default:
-      return 'webm';
-  }
-}
-
-/**
- * Ensures the requested AI provider is configured before making an API call.
- *
- * @param {AiProvider} provider The provider being used.
- * @returns {string} The validated API key.
- */
-function requireApiKey(provider: AiProvider): string {
-  const apiKey = getApiKey(provider);
-  if (!apiKey) {
-    throw new Error(`Missing API key for provider "${provider}".`);
-  }
-  return apiKey;
-}
-
-/**
- * Resolves the provider to use for speech transcription, falling back away
- * from text-only providers when required.
- *
- * @param {AiProvider} provider The currently selected application provider.
- * @returns {AiProvider} A provider that can handle speech transcription.
- */
-function resolveSpeechProvider(provider: AiProvider): AiProvider {
-  if (provider === 'gemini' || provider === 'openai') {
-    return provider;
-  }
-  if (getApiKey('openai')) {
-    return 'openai';
-  }
-  if (getApiKey('gemini')) {
-    return 'gemini';
-  }
-  throw new Error(
-    'No transcription provider available. Configure OPENAI_API_KEY or GEMINI_API_KEY.',
-  );
-}
-
-/**
- * Extracts a plain text payload from an OpenAI Responses API result.
- *
- * @param {any} data The raw JSON payload returned by the Responses API.
- * @returns {string} The flattened textual response.
- */
-function extractOpenAIText(data: any): string {
-  if (typeof data?.output_text === 'string' && data.output_text.trim()) {
-    return data.output_text;
-  }
-
-  const outputItems = Array.isArray(data?.output) ? data.output : [];
-  const text = outputItems
-    .flatMap((item: any) => (Array.isArray(item?.content) ? item.content : []))
-    .filter((content: any) => content?.type === 'output_text' || content?.type === 'text')
-    .map((content: any) => content?.text || '')
-    .join('');
-
-  if (text.trim()) {
-    return text;
-  }
-
-  throw new Error('OpenAI returned an empty response.');
-}
-
-/**
- * Generates text with the selected provider using a unified prompt interface.
+ * Generates text via the privileged main process. The selected provider is
+ * resolved server-side so renderer code never touches an API key.
  *
  * @param {TextGenerationOptions} options The provider, prompt, and optional
  * provider-specific generation settings.
@@ -175,132 +62,32 @@ async function generateTextWithProvider(
   options: TextGenerationOptions,
 ): Promise<string> {
   const {provider, prompt, geminiConfig} = options;
-
-  if (provider === 'gemini') {
-    const ai = new GoogleGenAI({apiKey: requireApiKey('gemini')});
-    const response = await ai.models.generateContent({
-      model: GEMINI_TEXT_MODEL,
-      contents: [{text: prompt}],
-      config: geminiConfig,
-    });
-    return response.text ?? '';
-  }
-
-  if (provider === 'openai') {
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${requireApiKey('openai')}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: OPENAI_TEXT_MODEL,
-        input: prompt,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI request failed: ${response.status} ${response.statusText}`);
-    }
-
-    return extractOpenAIText(await response.json());
-  }
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': requireApiKey('anthropic'),
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_TEXT_MODEL,
-      max_tokens: 4096,
-      messages: [{role: 'user', content: prompt}],
-    }),
+  const result = await requireBridge().generateText({
+    provider,
+    prompt,
+    geminiConfig,
   });
-
-  if (!response.ok) {
-    throw new Error(`Anthropic request failed: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  const text = (Array.isArray(data?.content) ? data.content : [])
-    .filter((item: any) => item?.type === 'text')
-    .map((item: any) => item?.text || '')
-    .join('');
-
-  if (!text.trim()) {
-    throw new Error('Anthropic returned an empty response.');
-  }
-
-  return text;
+  return result ?? '';
 }
 
 /**
- * Transcribes recorded audio with the selected speech-capable provider.
+ * Transcribes recorded audio via the privileged main process.
  *
- * @param {{provider: AiProvider, audioBlob: Blob, base64Audio: string, mimeType: string}} options
+ * @param {{provider: AiProvider, base64Audio: string, mimeType: string}} options
  * The transcription provider and audio payload metadata.
  * @returns {Promise<string>} The transcribed text.
  */
 async function transcribeAudioWithProvider(options: {
   provider: AiProvider;
-  audioBlob: Blob;
   base64Audio: string;
   mimeType: string;
 }): Promise<string> {
-  const provider = resolveSpeechProvider(options.provider);
-
-  if (provider === 'gemini') {
-    const ai = new GoogleGenAI({apiKey: requireApiKey('gemini')});
-    const response = await ai.models.generateContent({
-      model: GEMINI_TRANSCRIPTION_MODEL,
-      contents: [
-        {text: 'Generate a complete, detailed transcript of this audio.'},
-        {
-          inlineData: {
-            mimeType: options.mimeType,
-            data: options.base64Audio,
-          },
-        },
-      ],
-    });
-    return response.text ?? '';
-  }
-
-  const uploadMimeType = getBaseMimeType(options.mimeType) || 'audio/webm';
-  const uploadBlob =
-    options.audioBlob.type === uploadMimeType
-      ? options.audioBlob
-      : new Blob([options.audioBlob], {type: uploadMimeType});
-  const formData = new FormData();
-  formData.append(
-    'file',
-    uploadBlob,
-    `recording.${getAudioFileExtension(uploadMimeType)}`,
-  );
-  formData.append('model', OPENAI_TRANSCRIPTION_MODEL);
-
-  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${requireApiKey('openai')}`,
-    },
-    body: formData,
+  const result = await requireBridge().transcribeAudio({
+    provider: options.provider,
+    audioBase64: options.base64Audio,
+    mimeType: options.mimeType,
   });
-
-  if (!response.ok) {
-    const errorText = (await response.text()).trim();
-    throw new Error(
-      `OpenAI transcription failed: ${response.status} ${response.statusText}${
-        errorText ? ` - ${errorText}` : ''
-      }`,
-    );
-  }
-
-  const data = await response.json();
-  return typeof data?.text === 'string' ? data.text : '';
+  return result ?? '';
 }
 
 /**
@@ -800,15 +587,39 @@ class VoiceNotesApp {
   }
 
   /**
-   * Restores the selected AI provider from local storage and updates the UI to
-   * reflect any provider-specific capability constraints.
+   * Resolves the persisted AI provider preference from the main process
+   * (Electron user-data) or the `AI_PROVIDER` env var, with a one-shot
+   * migration from any legacy `localStorage` value.
    *
-   * @returns {void} No return value.
+   * @returns {Promise<void>} Resolves once the selector reflects the
+   * persisted provider.
    */
-  private initProviderSelection(): void {
-    const storedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
-    this.providerSelect.value = normalizeProvider(storedProvider ?? DEFAULT_PROVIDER);
-    this.updateProviderSelectionUI();
+  private async initProviderSelection(): Promise<void> {
+    this.providerSelect.disabled = true;
+    try {
+      const bridge = window.rambleOnDB;
+      let resolved: AiProvider = FALLBACK_PROVIDER;
+
+      if (bridge?.getProviderPreference) {
+        const remote = await bridge.getProviderPreference();
+        const legacy = localStorage.getItem(PROVIDER_STORAGE_KEY);
+
+        if (!remote && legacy) {
+          const migrated = normalizeProvider(legacy);
+          await bridge.setProviderPreference?.(migrated);
+          localStorage.removeItem(PROVIDER_STORAGE_KEY);
+          resolved = migrated;
+        } else if (remote) {
+          resolved = normalizeProvider(remote);
+          if (legacy) localStorage.removeItem(PROVIDER_STORAGE_KEY);
+        }
+      }
+
+      this.providerSelect.value = resolved;
+    } finally {
+      this.providerSelect.disabled = false;
+      this.updateProviderSelectionUI();
+    }
   }
 
   /**
@@ -821,16 +632,20 @@ class VoiceNotesApp {
   }
 
   /**
-   * Persists a provider selection change and refreshes any provider-specific
-   * UI affordances.
+   * Persists a provider selection change to the main-process preferences
+   * file and refreshes any provider-specific UI affordances.
    *
-   * @returns {void} No return value.
+   * @returns {Promise<void>} Resolves after the preference is saved.
    */
-  private handleProviderChange(): void {
+  private async handleProviderChange(): Promise<void> {
     const provider = this.getSelectedProvider();
-    localStorage.setItem(PROVIDER_STORAGE_KEY, provider);
     this.updateProviderSelectionUI();
     this.recordingStatus.textContent = `Using ${provider} for supported AI tasks.`;
+    try {
+      await window.rambleOnDB?.setProviderPreference?.(provider);
+    } catch (err) {
+      console.warn('[ramble-on] Failed to persist provider preference:', err);
+    }
   }
 
   /**
@@ -2340,7 +2155,7 @@ class VoiceNotesApp {
       if (!base64Audio) throw new Error('Failed to convert audio to base64');
 
       const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
-      await this.getTranscription(audioBlob, base64Audio, mimeType);
+      await this.getTranscription(base64Audio, mimeType);
     } catch (error) {
       console.error('Error in processAudio:', error);
       this.recordingStatus.textContent =
@@ -2354,13 +2169,11 @@ class VoiceNotesApp {
    * transcription and dispatches the result into note, ATP, or Medium
    * workflows.
    *
-   * @param {Blob} audioBlob The recorded audio blob.
    * @param {string} base64Audio The recorded audio encoded as base64.
    * @param {string} mimeType The MIME type used for the recording.
    * @returns {Promise<void>} Resolves after the transcription flow completes.
    */
   private async getTranscription(
-    audioBlob: Blob,
     base64Audio: string,
     mimeType: string,
   ): Promise<void> {
@@ -2368,7 +2181,6 @@ class VoiceNotesApp {
       this.recordingStatus.textContent = 'Getting transcription...';
       const transcriptionText = await transcribeAudioWithProvider({
         provider: this.getSelectedProvider(),
-        audioBlob,
         base64Audio,
         mimeType,
       });
@@ -3469,65 +3281,21 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
     }, 5000);
 
     try {
-      // API Key selection for Veo models
-      if (typeof window.aistudio !== 'undefined') {
-          if (!await window.aistudio.hasSelectedApiKey()) {
-              this.modalStatusText.textContent = 'Please select your API key for video generation.';
-              await window.aistudio.openSelectKey();
-              // Assume success after openSelectKey; the next API call will fail if not,
-              // and error handling will re-prompt.
-              this.modalStatusText.textContent = this.VIDEO_STATUS_MESSAGES[0]; // Reset status
-          }
-      } else {
-          console.warn('window.aistudio is not defined. API key selection for Veo models may not function as expected.');
-      }
-      
-      const ai = new GoogleGenAI({apiKey: requireApiKey('gemini')});
-
-      let operation = await ai.models.generateVideos({
-        model: GEMINI_VIDEO_MODEL,
-        prompt: prompt,
-        config: {
-          numberOfVideos: 1,
-        },
+      const { buffer, contentType } = await requireBridge().generateVideo({
+        prompt,
       });
 
-      while (!operation.done) {
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        operation = await ai.operations.getVideosOperation({ operation: operation });
-      }
-      
       clearInterval(messageInterval);
-      
       this.modalStatusText.textContent = 'Downloading video...';
 
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (downloadLink) {
-          const fetchUrl = `${downloadLink}&key=${requireApiKey('gemini')}`;
-          const response = await fetch(fetchUrl);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch video file: ${response.status} ${response.statusText}`);
-          }
-          const videoBlob = await response.blob();
-          const videoUrl = URL.createObjectURL(videoBlob);
-          this.updateModalState('result', { videoUrl });
-      } else {
-          throw new Error('Video generation finished, but no video URL was returned.');
-      }
-
+      const videoBlob = new Blob([buffer], { type: contentType });
+      const videoUrl = URL.createObjectURL(videoBlob);
+      this.updateModalState('result', { videoUrl });
     } catch (error) {
       clearInterval(messageInterval);
       console.error('Error generating video:', error);
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-      
-      // Check for API key related errors for Veo model and re-prompt
-      if (typeof window.aistudio !== 'undefined' && errorMessage.includes("Requested entity was not found.")) {
-          this.modalStatusText.textContent = 'API key invalid or not found. Please re-select your API key.';
-          await window.aistudio.openSelectKey();
-          this.updateModalState('error', { title: 'Key Selection Required', error: 'Please retry video generation after selecting your API key. (ai.google.dev/gemini-api/docs/billing)' });
-      } else {
-          this.updateModalState('error', { title: 'Generation Failed', error: errorMessage });
-      }
+      this.updateModalState('error', { title: 'Generation Failed', error: errorMessage });
     }
   }
 
@@ -3599,14 +3367,6 @@ ${mediumData.metaInsight ? `**Meta Insight:** ${mediumData.metaInsight}\n` : ''}
  */
 document.addEventListener('DOMContentLoaded', () => {
   new VoiceNotesApp();
-
-  // Asynchronously populate runtime API keys from the Electron main process.
-  // Keys are fetched via IPC so they are never baked into the renderer bundle.
-  window.rambleOnDB?.getApiKeys?.().then((keys) => {
-    if (keys) runtimeApiKeys = keys;
-  }).catch((err) => {
-    console.warn('[ramble-on] Failed to load API keys from main process:', err);
-  });
 
   document
     .querySelectorAll<HTMLElement>('[contenteditable][placeholder]')

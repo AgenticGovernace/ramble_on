@@ -82,14 +82,48 @@ contextBridge.exposeInMainWorld('rambleOnDB', {
    */
   renameKnowledgeBasePath: (payload) => ipcRenderer.invoke('kb:rename-path', payload),
   /**
-   * Retrieves the API keys configured in the main process environment.
-   * Keys are provided at runtime via IPC so they are not baked into the
-   * renderer bundle.
+   * Returns the persisted AI provider preference, falling back to the
+   * `AI_PROVIDER` environment variable when no user-data preference exists.
+   * The renderer never sees raw provider keys — only this normalized
+   * provider identifier.
    *
-   * @returns {Promise<{GEMINI_API_KEY: string, OPENAI_API_KEY: string, ANTHROPIC_API_KEY: string, AI_PROVIDER: string}>}
-   * The configured API keys and default provider.
+   * @returns {Promise<'gemini'|'openai'|'anthropic'|''>} The active provider.
    */
-  getApiKeys: () => ipcRenderer.invoke('app:get-api-keys'),
+  getProviderPreference: () => ipcRenderer.invoke('app:get-provider-preference'),
+  /**
+   * Persists a provider preference to the Electron user-data directory.
+   *
+   * @param {'gemini'|'openai'|'anthropic'} provider The provider to persist.
+   * @returns {Promise<{success: boolean, provider: string}>}
+   */
+  setProviderPreference: (provider) =>
+    ipcRenderer.invoke('app:set-provider-preference', provider),
+  /**
+   * Generates text via the privileged main process. Provider keys never
+   * cross into the renderer.
+   *
+   * @param {{provider?: string, prompt: string, geminiConfig?: object}} payload
+   * @returns {Promise<string>} The generated text response.
+   */
+  generateText: (payload) => ipcRenderer.invoke('ai:generate-text', payload),
+  /**
+   * Transcribes audio bytes via the privileged main process.
+   *
+   * @param {{provider?: string, audioBase64: string, mimeType: string}} payload
+   * @returns {Promise<string>} The transcribed text.
+   */
+  transcribeAudio: (payload) =>
+    ipcRenderer.invoke('ai:transcribe-audio', payload),
+  /**
+   * Generates a Gemini Veo video and returns the downloaded bytes. Polling
+   * and download both happen in main so the API key never leaves the
+   * privileged process.
+   *
+   * @param {{prompt: string}} payload
+   * @returns {Promise<{buffer: ArrayBuffer, contentType: string}>}
+   */
+  generateVideo: (payload) =>
+    ipcRenderer.invoke('ai:generate-video', payload),
   /**
    * Registers a renderer callback for Knowledge Base change notifications.
    *
