@@ -6,6 +6,7 @@
 
 'use strict';
 
+const { z } = require('zod');
 const { generateText } = require('../clients/ai-client.cjs');
 const { buildKbContext } = require('../kb-context.cjs');
 
@@ -37,23 +38,26 @@ OUTPUT: A clean, structured markdown note. Include a Signal Check at the end —
 
 module.exports = {
   name: 'ramble.translate',
+  title: 'Translate raw ramble',
   description:
     'Translate raw ramble into a clean, structured polished note. Preserves voice. Grounds context in Notion KB.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      text: { type: 'string', description: 'The raw input text to translate.' },
-      additional_context: {
-        type: 'string',
-        description: 'Optional instruction or framing from the user.',
-      },
-      provider: {
-        type: 'string',
-        enum: ['gemini', 'openai', 'anthropic'],
-        description: 'Optional AI provider override.',
-      },
-    },
-    required: ['text'],
+  inputSchemaZod: {
+    text: z.string().describe('The raw input text to translate.'),
+    additional_context: z
+      .string()
+      .optional()
+      .describe('Optional instruction or framing from the user.'),
+    provider: z
+      .enum(['gemini', 'openai', 'anthropic'])
+      .optional()
+      .describe('Optional AI provider override.'),
+  },
+  annotations: {
+    title: 'Translate raw ramble',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
   },
   handler,
 };
