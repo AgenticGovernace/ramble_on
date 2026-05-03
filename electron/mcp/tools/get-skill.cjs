@@ -19,22 +19,34 @@ const { ok, err, assertResult } = require('../../lib/result.cjs');
 const SKILL_FILENAME = 'SKILL.md';
 
 /**
+ * Detects whether the host is a packaged Electron app. `process.resourcesPath`
+ * is set in dev too (it points to Electron's bundled resources), so comparing
+ * it to `process.execPath` misclassifies dev runs as packaged. The reliable
+ * signal is `app.isPackaged`, but `app` is only available when this module
+ * runs inside Electron — under plain Node (tests, standalone MCP) the
+ * `electron` require throws. Fall back to `false` in that case.
+ *
+ * @returns {boolean} True when running inside a packaged Electron app.
+ */
+const isPackagedElectron = () => {
+  try {
+    return require('electron').app.isPackaged === true;
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Resolves the absolute path to the bundled SKILL.md, mirroring
- * `electron/main.cjs`'s skill source resolution. We can't import `app` from
- * Electron here because this module also runs under plain Node when the MCP
- * server is exercised by tests, so we read `process.resourcesPath`
- * defensively.
+ * `electron/main.cjs`'s skill source resolution. Packaged builds read from
+ * `process.resourcesPath/ramble-on`; everything else (dev runs, tests,
+ * standalone MCP) reads from the repo root.
  *
  * @returns {string} Absolute path to SKILL.md.
  */
 const resolveSkillPath = () => {
-  if (process.resourcesPath && process.resourcesPath !== process.execPath) {
-    const packagedPath = path.join(
-      process.resourcesPath,
-      'ramble-on',
-      SKILL_FILENAME,
-    );
-    return packagedPath;
+  if (isPackagedElectron()) {
+    return path.join(process.resourcesPath, 'ramble-on', SKILL_FILENAME);
   }
   return path.join(__dirname, '..', '..', '..', 'ramble-on', SKILL_FILENAME);
 };

@@ -17,6 +17,10 @@
     "desktop:dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "desktop:build": "vite build --base=./ && electron-builder",
     "desktop:build:mac": "vite build --base=./ && electron-builder --mac",
+    "app:init": "node scripts/init.mjs",
+    "app:update": "node scripts/update.mjs",
+    "app:uninstall": "node scripts/uninstall.mjs",
+    "app:doctor": "node scripts/doctor.mjs",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -52,6 +56,12 @@
       "electron/**",
       "kb/**",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "ramble-on",
+        "to": "ramble-on"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",
