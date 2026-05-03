@@ -13,6 +13,7 @@ const toPlatformPost = require('./to-platform-post.cjs');
 const kbSearch = require('./kb-search.cjs');
 const kbWrite = require('./kb-write.cjs');
 const getVoiceModel = require('./get-voice-model.cjs');
+const getSkill = require('./get-skill.cjs');
 
 const ALL_TOOLS = [
   translate,
@@ -21,12 +22,13 @@ const ALL_TOOLS = [
   kbSearch,
   kbWrite,
   getVoiceModel,
+  getSkill,
 ];
 
 /**
  * Builds a name → tool lookup from the registered tool modules.
  *
- * @returns {Record<string, {name: string, description: string, inputSchema: object, handler: Function}>}
+ * @returns {Record<string, {name: string, description: string, inputSchemaZod: object, annotations: object, handler: Function}>}
  */
 const buildToolRegistry = () => {
   const registry = Object.create(null);

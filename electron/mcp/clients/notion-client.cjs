@@ -101,6 +101,27 @@ const kbSearch = async ({ query, max_results = 5 }) => {
 };
 
 /**
+ * Fetches all child blocks of a Notion page, automatically paginating through
+ * multiple pages of results when the page has more than 100 blocks.
+ *
+ * @param {string} page_id The Notion page identifier to fetch blocks for.
+ * @returns {Promise<Array<object>>} All child block results.
+ */
+const fetchAllBlocks = async (page_id) => {
+  const allResults = [];
+  let cursor;
+  do {
+    const endpoint = cursor
+      ? `/blocks/${page_id}/children?page_size=100&start_cursor=${encodeURIComponent(cursor)}`
+      : `/blocks/${page_id}/children?page_size=100`;
+    const response = await notionRequest('GET', endpoint);
+    allResults.push(...(response.results || []));
+    cursor = response.has_more ? response.next_cursor : undefined;
+  } while (cursor);
+  return allResults;
+};
+
+/**
  * Fetch the full content of a Notion page by ID.
  *
  * @param {{page_id: string}} params The Notion page identifier to fetch.
@@ -108,9 +129,9 @@ const kbSearch = async ({ query, max_results = 5 }) => {
  * The page title, flattened body text, source id, and URL.
  */
 const kbFetchPage = async ({ page_id }) => {
-  const [page, blocks] = await Promise.all([
+  const [page, blockResults] = await Promise.all([
     notionRequest('GET', `/pages/${page_id}`),
-    notionRequest('GET', `/blocks/${page_id}/children?page_size=100`),
+    fetchAllBlocks(page_id),
   ]);
 
   const title = extractPageTitle(page);
@@ -122,7 +143,7 @@ const kbFetchPage = async ({ page_id }) => {
     return content.rich_text.map((rt) => rt.plain_text).join('');
   };
 
-  const bodyText = (blocks.results || [])
+  const bodyText = blockResults
     .map(extractText)
     .filter(Boolean)
     .join('\n');
@@ -192,11 +213,8 @@ const kbWrite = async ({ page_id, title, content, mode = 'append' }) => {
  * when found.
  */
 const getVoiceModel = async () => {
-  const result = await notionRequest(
-    'GET',
-    `/blocks/${CONFIG.notion.rootPage}/children?page_size=25`,
-  );
-  const voicePage = (result.results || []).find(
+  const allBlocks = await fetchAllBlocks(CONFIG.notion.rootPage);
+  const voicePage = allBlocks.find(
     (block) =>
       block.type === 'child_page' &&
       block.child_page?.title?.toLowerCase().includes('voice model'),

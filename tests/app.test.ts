@@ -15,5 +15,6 @@ describe('static entry points', () => {
     expect(html).toContain('id="polishedNote"');
     expect(html).toContain('id="openKbManagerButton"');
     expect(html).toContain('id="kbManagerModal"');
+    expect(html).toContain('id="providerSelect"');
   });
 });
