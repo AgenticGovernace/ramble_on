@@ -6,31 +6,29 @@
 
 'use strict';
 
+const { z } = require('zod');
 const { kbWrite } = require('../clients/notion-client.cjs');
 
 module.exports = {
   name: 'ramble.kb_write',
+  title: 'Write to Notion KB',
   description:
     'Write or append content to a Notion KB page. Provide page_id to append, or title to create a new child page.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      page_id: {
-        type: 'string',
-        description: 'Notion page ID to append to.',
-      },
-      title: {
-        type: 'string',
-        description: 'Title for a new page (used if no page_id).',
-      },
-      content: { type: 'string', description: 'Content to write.' },
-      mode: {
-        type: 'string',
-        enum: ['append', 'create'],
-        description: 'Write mode.',
-      },
-    },
-    required: ['content'],
+  inputSchemaZod: {
+    page_id: z.string().optional().describe('Notion page ID to append to.'),
+    title: z
+      .string()
+      .optional()
+      .describe('Title for a new page (used if no page_id).'),
+    content: z.string().describe('Content to write.'),
+    mode: z.enum(['append', 'create']).optional().describe('Write mode.'),
+  },
+  annotations: {
+    title: 'Write to Notion KB',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
   },
   handler: kbWrite,
 };

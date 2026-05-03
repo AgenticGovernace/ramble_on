@@ -89,6 +89,135 @@ ramble_on/
 ```
 ---
 
+## Architecture Overview
+
+### 1. Renderer Layer
+
+The renderer is implemented as a single controller class, `VoiceNotesApp`, in [`src/main.tsx`](src/main.tsx). This class acts as the composition root for the browser-side application.
+
+Architectural style:
+
+- Monolithic controller pattern in the renderer
+- Event-driven UI wiring through DOM listeners
+- Local state container held on the class instance
+- Browser API composition rather than framework-managed reactivity
+
+Key renderer workflows:
+
+- `toggleRecording()`, `startRecording()`, `stopRecording()`, `processAudio()`
+- `getTranscription()`, `getPolishedNote()`
+- `formatAsATP()`, `formatAsMediumPost()`
+- `openKnowledgeBaseFile()`, `saveKnowledgeBaseFile()`
+- `startVideoGeneration()`
+
+### 2. Electron Main Process
+
+The Electron main process in [`electron/main.cjs`](electron/main.cjs) is the desktop orchestration layer.
+
+Its responsibilities are:
+
+- Creating the application window
+- Initializing SQLite via `better-sqlite3`
+- Registering IPC handlers for note and Knowledge Base persistence
+- Managing the Knowledge Base root directory
+- Watching the Knowledge Base on disk via `chokidar`
+- Mirroring Knowledge Base files into SQLite for queryability
+- Starting and stopping the local MCP server
+
+Important helpers:
+
+- `initDatabase()`: Creates tables and prepared statements
+- `resolveKbPath()`: Prevents path traversal and absolute-path escapes
+- `readKbTree()`: Builds the renderer-facing file tree
+- `startKbWatcher()`: Keeps the renderer and SQLite synchronized with disk
+- `registerIpcHandlers()`: Defines the renderer-facing persistence interface
+
+Persistence model:
+
+- Notes themselves are stored in renderer `localStorage`
+- Recording metadata, raw entries, polished entries, and Knowledge Base snapshots live in SQLite under the Electron user-data directory
+- Knowledge Base files are stored as regular files under `kb/` in development or under the packaged app user-data directory in production
+
+### 3. Preload Bridge
+
+[`electron/preload.cjs`](electron/preload.cjs) uses `contextBridge.exposeInMainWorld()` to publish a constrained `window.rambleOnDB` API. This is the app's main boundary between untrusted renderer code and privileged Electron capabilities.
+
+Exposed operations:
+
+- `saveRecording`
+- `saveRawEntry`
+- `savePolishedEntry`
+- `getKnowledgeBase`
+- `writeKnowledgeBaseFile`
+- `createKnowledgeBaseFolder`
+- `createKnowledgeBaseFile`
+- `deleteKnowledgeBasePath`
+- `renameKnowledgeBasePath`
+- `onKnowledgeBaseUpdated`
+
+This is the repository's clearest service-boundary pattern. It is not dependency injection in a formal container sense, but it is a service interface exposed across a trust boundary.
+
+### 4. MCP Server Layer
+
+[`electron/mcp-server.cjs`](electron/mcp-server.cjs) exposes a local HTTP JSON-RPC server intended to be consumed as an MCP tool provider.
+
+Responsibilities:
+
+- Serving `tools/list`, `tools/call`, and `initialize` JSON-RPC methods
+- Wrapping Gemini text transformation workflows
+- Wrapping Notion Knowledge Base search and write operations
+- Providing a machine-callable local interface for translation-related features
+
+Tool handlers:
+
+- `translate()`: Raw text to polished note
+- `toAtp()`: Raw text to ATP payload
+- `toPlatformPost()`: Raw text to platform-specific post
+- `kbSearch()`: Notion search
+- `kbWrite()`: Notion page append/create
+- `getVoiceModel()`: Voice model discovery in Notion
+
+External interfaces:
+
+- HTTP on `127.0.0.1:${RAMBLE_MCP_PORT:-3748}`
+- JSON-RPC 2.0 requests
+- Notion REST API
+- Gemini API through `@google/genai`
+
+## Component Interactions
+
+The primary request and data flow is:
+
+1. `index.html` loads `src/main.tsx`.
+2. `DOMContentLoaded` creates `VoiceNotesApp`.
+3. `VoiceNotesApp` binds DOM events, restores local state, and requests Knowledge Base data from `window.rambleOnDB`.
+4. `window.rambleOnDB` forwards those calls through the preload bridge to Electron IPC.
+5. `electron/main.cjs` executes IPC handlers against SQLite and the filesystem.
+6. Knowledge Base changes are pushed back to the renderer through the `kb:updated` IPC event.
+7. AI formatting flows call Gemini directly from the renderer for transcription, polishing, ATP formatting, Medium formatting, and video generation.
+8. The Electron main process separately starts the local MCP server, which also calls Gemini and Notion for external tool-driven workflows.
+
+Communication methods:
+
+- Renderer to main process: Electron IPC with `ipcRenderer.invoke()` and `ipcMain.handle()`
+- Main process to renderer: one-way IPC event `kb:updated`
+- Renderer to AI services: direct provider calls to Gemini, OpenAI, or Anthropic depending on selection
+- MCP server to external tools: local HTTP JSON-RPC
+- MCP server to Notion: HTTPS REST calls
+
+Dependency/service patterns:
+
+- Preload bridge acts as a service façade for privileged desktop operations
+- SQLite access is centralized in the Electron main process through prepared statements
+- Knowledge Base path resolution is centralized to prevent repeated path-safety logic
+- Renderer logic is tightly coupled inside one large controller class rather than split into injectable services
+
+## Deployment And Build Architecture
+
+### Local Development
+
+Web-only development:
+
 ## Getting Started
 ### Prerequisites
 - Node.js (v18+)
@@ -210,6 +339,182 @@ Ramble On is built on the same infrastructure powering [﻿Artemis City](%5Bhttp
 _Built in 2026. For those who think in signal._
 
 
+- `AI_PROVIDER`: Default text provider (`gemini`, `openai`, or `anthropic`)
+- `GEMINI_API_KEY`: Primary Gemini API key
+- `API_KEY`: Alternate Gemini API key fallback
+- `GEMINI_TEXT_MODEL`: Optional Gemini text model override
+- `GEMINI_TRANSCRIPTION_MODEL`: Optional Gemini speech model override
+- `GEMINI_VIDEO_MODEL`: Optional Gemini video model override
+- `OPENAI_API_KEY`: OpenAI API key for text and transcription
+- `OPENAI_TEXT_MODEL`: Optional OpenAI text model override
+- `OPENAI_TRANSCRIPTION_MODEL`: Optional OpenAI transcription model override
+- `ANTHROPIC_API_KEY`: Anthropic API key for text generation
+- `ANTHROPIC_TEXT_MODEL`: Optional Anthropic text model override
+- `NOTION_API_KEY`: Required for MCP Notion access
+- `RAMBLE_NOTION_ROOT`: Optional Notion root page ID override
+- `RAMBLE_MCP_PORT`: Optional MCP server port override
+- `VITE_DEV_SERVER_URL`: Electron development URL for the renderer
+
+### Runtime Environments
+
+Current code supports these practical modes:
+
+- Browser/Vite development: renderer features work, desktop persistence bridge does not
+- Electron development: full desktop flow, local SQLite, Knowledge Base disk access, local MCP server
+- Electron packaged production: full desktop flow using packaged assets and a user-data Knowledge Base root
+
+There is no separate server-side dev/staging/prod deployment model in the repository. The release architecture is a packaged desktop application, not a multi-environment web service.
+
+## Runtime Behavior
+
+### Application Initialization
+
+Startup sequence:
+
+1. Electron `app.whenReady()` initializes SQLite, IPC handlers, the MCP server, the main window, and the Knowledge Base watcher.
+2. The renderer bootstraps on `DOMContentLoaded`.
+3. `VoiceNotesApp` captures all DOM references, binds listeners, restores theme and append mode, loads notes from `localStorage`, loads Knowledge Base data through the preload bridge, and registers a watcher callback.
+
+### Note Capture And Processing
+
+When the user records:
+
+1. `startRecording()` requests microphone access.
+2. `MediaRecorder` captures audio chunks.
+3. `processAudio()` converts the result to base64 and prepares playback.
+4. `getTranscription()` sends audio to Gemini.
+5. If the recording is a normal note, the raw transcript is inserted into the current note and persisted.
+6. `getPolishedNote()` sends the text to Gemini again for markdown cleanup and structured formatting.
+7. The polished markdown is rendered with `marked`.
+8. Raw and polished content are persisted through `window.rambleOnDB` when available.
+
+### Knowledge Base Workflow
+
+When the renderer needs Knowledge Base data:
+
+1. It calls `window.rambleOnDB.getKnowledgeBase()`.
+2. Electron reads the `kb/` directory tree from disk.
+3. The tree is returned to the renderer.
+4. The renderer rebuilds path metadata and re-renders the tree.
+
+When the user edits the Knowledge Base:
+
+1. The renderer calls an IPC-backed preload method.
+2. The main process validates and resolves the path.
+3. The main process applies the filesystem change.
+4. The SQLite mirror is updated.
+5. `kb:updated` is emitted back to the renderer.
+6. The renderer reloads the Knowledge Base tree.
+
+### ATP / Medium / Video Workflows
+
+- ATP and Medium flows reuse the current polished note and optional spoken instructions, then ask Gemini to transform the content into a structured output.
+- Video generation submits the polished note text to Gemini video generation and polls until the operation completes.
+- The result is surfaced through a modal with loading, success, and error states.
+
+### Error Handling
+
+The codebase relies mainly on:
+
+- `try/catch` blocks around browser, filesystem, IPC, and AI operations
+- Status-text updates in the UI
+- `console.error()` and `console.warn()` logging
+- Guard clauses when required state or APIs are unavailable
+- `alert()` dialogs for user-visible failure cases in some workflows
+
+There is no centralized error boundary or structured telemetry layer. Error handling is local and imperative.
+
+### Background Activity
+
+Long-lived background work is limited to:
+
+- Electron file watching via `chokidar`
+- The local MCP HTTP server
+- MediaRecorder and Web Audio analyzer loops during active recording
+- Speech synthesis while reading aloud
+- Polling for long-running video generation operations
+
+## Setup Guide For A New Developer
+
+Prerequisites:
+
+- Node.js 20 recommended
+- npm
+- macOS, Windows, or Linux for Electron packaging
+
+Install:
+
+```bash
+npm install
+```
+
+Useful commands:
+
+```bash
+npm run dev
+npm run desktop:dev
+npm run typecheck
+npm run test
+npm run build
+npm run desktop:build
+```
+
+If you need Gemini or Notion-backed features, set the relevant environment variables before launching the app.
+
+Provider selection:
+
+- The app header includes an `AI` selector for runtime text-provider selection.
+- `Gemini`: text, transcription, and video are supported.
+- `OpenAI`: text and transcription are supported.
+- `Anthropic`: text is supported. Transcription falls back to OpenAI when configured, otherwise Gemini.
+- Video generation is intentionally restricted to Gemini in the current implementation.
+
+## Testing
+
+Current test coverage is minimal and focuses on static entry points and basic DOM access:
+
+- [`tests/app.test.ts`](tests/app.test.ts)
+- [`tests/sample.test.ts`](tests/sample.test.ts)
+
+The tests do not currently exercise:
+
+- Electron IPC flows
+- SQLite persistence
+- Notion integration
+- MCP request handling
+- MediaRecorder and microphone behavior
+- Gemini calls
+
+## Coding Standards Applied To This TypeScript Codebase
+
+The repository is not C++, so the Joint Strike Fighter guidance cannot be applied literally. The practical translation for this codebase is:
+
+- Prefer small, single-purpose methods over large multi-stage routines.
+- Keep control flow explicit and shallow; avoid clever expressions with hidden side effects.
+- Validate inputs at trust boundaries, especially filesystem paths and IPC payloads.
+- Isolate privileged operations behind narrow interfaces such as the preload bridge.
+- Favor predictable local state and clear ownership over implicit global coupling.
+- Document externally visible behavior and public interfaces with JSDoc.
+- Treat warnings seriously and keep `typecheck`, `test`, and `build` green.
+- Avoid unnecessary runtime dynamism that makes desktop behavior harder to reason about.
+
+The current codebase partially aligns with those goals, especially in Electron path validation and the preload service boundary, but the renderer remains highly centralized and would benefit from further decomposition if maintainability becomes a priority.
+
+## Known Architectural Characteristics
+
+- Strong desktop-first design
+- Thin security boundary via preload bridge
+- Local-first persistence with SQLite plus filesystem-backed KB
+- Heavy renderer-side orchestration in one large class
+- Direct vendor API coupling to Gemini from the renderer and MCP server
+- No formal DI container or plugin architecture inside the app itself
+
+## Repository Gaps Worth Knowing
+
+- The renderer is implemented as a large controller class, which increases coupling and makes isolated testing harder.
+- Note persistence is split between `localStorage` and SQLite, so the data model is not fully unified.
+- The MCP server and renderer both talk to Gemini independently, which duplicates transformation logic.
+- Automated tests are light relative to the amount of runtime logic in the app.
 <!-- eraser-additional-content -->
 ## Diagrams
 <!-- eraser-additional-files -->

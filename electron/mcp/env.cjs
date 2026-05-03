@@ -8,14 +8,25 @@
 
 'use strict';
 
+const fs = require('fs');
+
 const loadLocalEnvFiles = () => {
   for (const fileName of ['.env.local', 'env.local']) {
     try {
-      process.loadEnvFile(fileName);
-    } catch (error) {
-      if (error?.code !== 'ENOENT') {
-        throw error;
+      const content = fs.readFileSync(fileName, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx === -1) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+        if (key && !(key in process.env)) {
+          process.env[key] = val;
+        }
       }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
     }
   }
 };
@@ -32,7 +43,9 @@ const normalizeProvider = (provider) => {
   if (provider === 'openai' || provider === 'anthropic') {
     return provider;
   }
-  return 'gemini';
+  return 'process.env.AI_PROVIDER' in process.env
+normalizeProvider(process.env.AI_PROVIDER)
+    : 'openai';
 };
 
 const CONFIG = {

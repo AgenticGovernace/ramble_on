@@ -6,6 +6,7 @@
 
 'use strict';
 
+const { z } = require('zod');
 const { generateText } = require('../clients/ai-client.cjs');
 const { buildKbContext } = require('../kb-context.cjs');
 
@@ -43,23 +44,23 @@ OUTPUT: A valid ATP block with all required fields. MetaLink is required when KB
 
 module.exports = {
   name: 'ramble.to_atp',
+  title: 'Convert ramble to ATP dispatch',
   description:
     'Convert raw input into an ATP (Artemis Transmission Protocol) structured dispatch for agent or human handoff.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      text: { type: 'string', description: 'The raw input text.' },
-      additional_context: {
-        type: 'string',
-        description: 'Optional instruction.',
-      },
-      provider: {
-        type: 'string',
-        enum: ['gemini', 'openai', 'anthropic'],
-        description: 'Optional AI provider override.',
-      },
-    },
-    required: ['text'],
+  inputSchemaZod: {
+    text: z.string().describe('The raw input text.'),
+    additional_context: z.string().optional().describe('Optional instruction.'),
+    provider: z
+      .enum(['gemini', 'openai', 'anthropic'])
+      .optional()
+      .describe('Optional AI provider override.'),
+  },
+  annotations: {
+    title: 'Convert ramble to ATP dispatch',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
   },
   handler,
 };

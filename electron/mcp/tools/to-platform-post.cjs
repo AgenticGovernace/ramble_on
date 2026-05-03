@@ -6,6 +6,7 @@
 
 'use strict';
 
+const { z } = require('zod');
 const { generateText } = require('../clients/ai-client.cjs');
 const { buildKbContext } = require('../kb-context.cjs');
 
@@ -49,28 +50,26 @@ OUTPUT: Complete platform-ready draft including title, subtitle/deck (if applica
 
 module.exports = {
   name: 'ramble.to_platform_post',
+  title: 'Convert ramble to platform post',
   description:
     'Transform raw input into a platform-ready draft (Medium, Substack, LinkedIn, Ghost).',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      text: { type: 'string', description: 'The raw input text.' },
-      platform: {
-        type: 'string',
-        enum: ['medium', 'substack', 'linkedin', 'ghost'],
-        description: 'Target publishing platform.',
-      },
-      additional_context: {
-        type: 'string',
-        description: 'Optional instruction.',
-      },
-      provider: {
-        type: 'string',
-        enum: ['gemini', 'openai', 'anthropic'],
-        description: 'Optional AI provider override.',
-      },
-    },
-    required: ['text', 'platform'],
+  inputSchemaZod: {
+    text: z.string().describe('The raw input text.'),
+    platform: z
+      .enum(['medium', 'substack', 'linkedin', 'ghost'])
+      .describe('Target publishing platform.'),
+    additional_context: z.string().optional().describe('Optional instruction.'),
+    provider: z
+      .enum(['gemini', 'openai', 'anthropic'])
+      .optional()
+      .describe('Optional AI provider override.'),
+  },
+  annotations: {
+    title: 'Convert ramble to platform post',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
   },
   handler,
 };

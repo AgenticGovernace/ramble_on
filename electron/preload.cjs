@@ -82,6 +82,15 @@ contextBridge.exposeInMainWorld('rambleOnDB', {
    */
   renameKnowledgeBasePath: (payload) => ipcRenderer.invoke('kb:rename-path', payload),
   /**
+   * Retrieves the API keys configured in the main process environment.
+   * Keys are provided at runtime via IPC so they are not baked into the
+   * renderer bundle.
+   *
+   * @returns {Promise<{GEMINI_API_KEY: string, OPENAI_API_KEY: string, ANTHROPIC_API_KEY: string, AI_PROVIDER: string}>}
+   * The configured API keys and default provider.
+   */
+  getApiKeys: () => ipcRenderer.invoke('app:get-api-keys'),
+  /**
    * Registers a renderer callback for Knowledge Base change notifications.
    *
    * @param {Function} callback The callback invoked when the Knowledge Base
@@ -91,4 +100,12 @@ contextBridge.exposeInMainWorld('rambleOnDB', {
   onKnowledgeBaseUpdated: (callback) => {
     ipcRenderer.on('kb:updated', callback);
   },
+  /**
+   * Installs the bundled Ramble On skill into the Claude Desktop skills
+   * directory. Returns a discriminated Result — the renderer must check
+   * `r.ok` before reading `r.value` or `r.error`.
+   *
+   * @returns {Promise<{ok: true, value: {installedAt: string, files: string[]}} | {ok: false, error: {code: string, message: string}}>}
+   */
+  installSkill: () => ipcRenderer.invoke('skill:install'),
 });

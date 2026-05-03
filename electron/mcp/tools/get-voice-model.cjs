@@ -10,8 +10,16 @@ const { getVoiceModel } = require('../clients/notion-client.cjs');
 
 module.exports = {
   name: 'ramble.get_voice_model',
+  title: 'Retrieve voice model',
   description:
     "Retrieve the user's voice model from the Notion KB. Used to calibrate translation output.",
-  inputSchema: { type: 'object', properties: {} },
+  inputSchemaZod: {},
+  annotations: {
+    title: 'Retrieve voice model',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   handler: getVoiceModel,
 };
