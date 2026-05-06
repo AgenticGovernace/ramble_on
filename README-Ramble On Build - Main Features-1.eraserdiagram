@@ -1,0 +1,52 @@
+flowchart-diagram
+
+title Ramble On Build - Main Features
+direction right
+textSize large
+colorMode bold
+styleMode watercolor
+
+// Input Layer
+Voice or Text Input [shape: oval, icon: mic, color: lightblue]
+
+// Core Processing
+Processing [color: purple, icon: cpu] {
+  Ramble Capture [icon: edit-3, color: purple]
+  Context Engine [icon: link, color: purple]
+  Personal Knowledge Base [icon: database, color: purple]
+}
+
+// Translation Layer
+Translation [color: orange, icon: refresh-cw] {
+  Style Learning [icon: user, color: orange]
+  Idea Summarization [icon: file-text, color: orange]
+  Platform Rules Engine [icon: book-open, color: orange]
+}
+
+// Output Options
+Outputs [color: green, icon: send] {
+  Clean Blog Posts [icon: edit, color: green]
+  Formatted Notes [icon: clipboard, color: green]
+  Platform Ready Content [icon: globe, color: green]
+}
+
+// Supported Platforms
+Platforms [color: blue, icon: layers] {
+  Medium [icon: medium, color: blue]
+  Dev.to [icon: dev-dot-to, color: blue]
+  Other Sites [icon: external-link, color: blue]
+}
+
+// Benefit
+Clear Communication [shape: oval, icon: heart, color: pink]
+
+// Relationships
+Voice or Text Input > Ramble Capture
+Ramble Capture > Context Engine
+Context Engine > Personal Knowledge Base
+Personal Knowledge Base > Style Learning
+Style Learning > Idea Summarization
+Idea Summarization > Platform Rules Engine
+Platform Rules Engine > Outputs
+Clean Blog Posts > Platforms
+Platform Ready Content > Clear Communication: Your voice; understood

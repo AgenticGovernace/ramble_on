@@ -22,7 +22,7 @@ Desktop App [icon: monitor] {
 }
 
 
-Google Gemini [icon: google]
+LLM Provider [icon: cpu]
 
 Browser TTS [icon: volume-2]
 Notion [icon: notion] {
@@ -40,14 +40,18 @@ IPC Handlers <> SQLite DB: persist notes
 Chokidar Watcher --> SQLite DB: sync KB files
 
 // External AI connections
-Vite Frontend > Google Gemini: transcribe & polish
-Vite Frontend > Google Gemini: ATP formatting
-Vite Frontend > Google Gemini: Medium post generation
-Vite Frontend > Google Gemini: video generation
+Vite Frontend > LLM Provider: transcribe & polish
+Vite Frontend > LLM Provider: ATP formatting
+Vite Frontend > LLM Provider: Medium post generation
+Vite Frontend > LLM Provider: video generation
 
 // TTS
 Vite Frontend > Browser TTS: read aloud
 Chokidar Watcher --> Notion Backend Storage: sync changes
 Vite Frontend <> Context Router: contextual info
 Context Router <> Notion Backend Storage: route context
-
+Vite Frontend > LLM Provider: transcribe & polish
+Vite Frontend > LLM Provider: ATP formatting
+Vite Frontend > LLM Provider: Medium post generation
+Vite Frontend > LLM Provider: video generation
+Context Router > LLM Provider: text transformation
