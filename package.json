@@ -59,7 +59,7 @@
         "dmg",
         "zip"
       ],
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Ramble On uses the microphone to record your thoughts.",
         "NSCameraUsageDescription": "Ramble On can use the camera when needed."
