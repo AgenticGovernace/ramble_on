@@ -43,9 +43,7 @@ const normalizeProvider = (provider) => {
   if (provider === 'openai' || provider === 'anthropic') {
     return provider;
   }
-  return 'process.env.AI_PROVIDER' in process.env
-normalizeProvider(process.env.AI_PROVIDER)
-    : 'openai';
+  return 'gemini';
 };
 
 const CONFIG = {
